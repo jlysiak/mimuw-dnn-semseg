@@ -66,7 +66,7 @@ class Trainer(object):
         sys.stderr.write(s)
         self.log_file.write(s)
 
-    def setup_input_pipes(self):
+    def setup_input_pipes(self, **kw):
         """
         Wraper for input pipe creator.
         Places pipe on cpu in proper name scope.
@@ -74,7 +74,7 @@ class Trainer(object):
 
         with tf.device("/cpu:0"):
             with tf.name_scope("input_pipe"):
-                return self._setup_input_pipes()
+                return self._setup_input_pipes(**kw)
 
     def _to_raw_imgs(img_path, label_path):
         """
@@ -206,11 +206,18 @@ class Trainer(object):
         it_v =  ds_v.make_initializable_iterator()
         return it_t, it_v
 
-    def test_input_pipe(self, train_outs="test_imgs", 
-            valid_outs="test_labs", frac=1.):
+    def test_input_pipe(self, out_dir="pipe_test", train_outs="training", 
+            valid_outs="validation", frac=1.):
         """
         Handy method to check input pipe.
         """
+        t_outs = os.path.join(out_dir, train_outs)
+        v_outs = os.path.join(out_dir, valid_outs)
+        if not os.path.exists(t_outs):
+            os.makedirs(t_outs)
+        if not os.path.exists(v_outs):
+            os.makedirs(v_outs)
+
         self.log("******* Input pipe test")
         it_t, it_v = self.setup_input_pipes(frac=frac)
         next_t = it_t.get_next()
@@ -224,9 +231,9 @@ class Trainer(object):
                     a, b = sess.run(next_t)
                     print(i, a.shape, b.shape)
                     result = Image.fromarray(a.astype(np.uint8))
-                    result.save(os.path.join(train_outs, "%d-a.jpg" % i))
+                    result.save(os.path.join(t_outs, "%d-a.jpg" % i))
                     result = Image.fromarray(b.astype(np.uint8).reshape(256,256), mode="L")
-                    result.save(os.path.join(train_outs, "%d-b.png" % i))
+                    result.save(os.path.join(t_outs, "%d-b.png" % i))
                     i += 1
             except tf.errors.OutOfRangeError:
                 print("End...")
@@ -237,18 +244,111 @@ class Trainer(object):
                     a, b = sess.run(next_v)
                     print(i, a.shape, b.shape)
                     result = Image.fromarray(a.astype(np.uint8))
-                    result.save(os.path.join(valid_outs, "%d-a.jpg" % i))
+                    result.save(os.path.join(v_outs, "%d-a.jpg" % i))
                     result = Image.fromarray(b.astype(np.uint8).reshape(256,256), mode="L")
-                    result.save(os.path.join(valid_outs, "%d-b.png" % i))
+                    result.save(os.path.join(v_outs, "%d-b.png" % i))
                     i += 1
             except tf.errors.OutOfRangeError:
                 print("End...")
+
+
+    def build_network(self, x_iter, y_iter):
+        """
+        Build neural network.
+        Change `NHWC` into `NCHW` for better performance
+        on GPUS.
+        """
+        x_iter = tf.reshape(tf.transpose(x_iter), shape=[-1, 3, 256, 256])
+        with tf.device("/cpu:0"):
+            with tf.name_scope("network"):
+                return self._build_network(x_iter, y_iter)
+
+    def weight_variable(shape):
+        try:
+            stddev = np.prod(shape) ** (-0.5)
+        except:
+            stddev = np.prod(shape).value ** (-0.5)
+        initializer = tf.truncated_normal(shape, stddev=stddev)
+        return tf.Variable(initializer, name='weight')
+
+
+    def _build_network(self, x_iter, y_iter):
+        
+        def conv2d(x, out_sz):
+            shape = [3, 3] + x.shape[1:2].as_list() + [out_sz]
+            W = Trainer.weight_variable(shape)
+            return tf.nn.conv2d(x, W, 
+                strides=[1] * 4, 
+                padding='SAME',
+                data_format='NCHW', 
+                use_cudnn_on_gpu=True)
+        
+        def upconv2d(x, out_sz):
+            shape = [3, 3] + x.shape[1:2].as_list() + [out_sz]
+            W = Trainer.weight_variable(shape)
+            return tf.nn.conv2d_transpose(x, W, 
+                strides=[1, 2, 2, 1], 
+                padding='SAME',
+                data_format='NCHW', 
+                use_cudnn_on_gpu=True)
+
+        def pool(x):
+            k = [1, 1, 2, 2]
+            return tf.nn.max_pool(x, 
+                    ksize=k, 
+                    strides=k, 
+                    padding='SAME',
+                    data_format='NCHW')
+
+        signal = x_iter
+        layers = [signal]
+        i = 0
+        self.log("** Layers:")
+        self.log("%d - %s" % (i, str(signal)))
+        net_conf = [128, 256, 512, 1024, 2048, 4096, 2**13, 2**14]
+        train_indicator = tf.Variable(True,
+            trainable=False,
+            name="TRAIN_INDICATOR")
+
+        # === Downsampling part
+        for n in net_conf:
+            signal = conv2d(signal, n)
+            signal = tf.contrib.layers.batch_norm(signal,
+                scale=True,
+                center=True,
+                fused=True,
+                is_training=train_indicator,
+                activation_fn=tf.nn.relu)
+            signal = pool(signal)
+            layers.append(signal)
+            i += 1
+            self.log("%d - %s" % (i, str(signal)))
+
+        # Upsampling
+        for n in net_conf:
+            signal = conv2d(signal, n)
+            signal = tf.contrib.layers.batch_norm(signal,
+                scale=True,
+                center=True,
+                fused=True,
+                is_training=train_indicator,
+                activation_fn=tf.nn.relu)
+            signal = pool(signal)
+            layers.append(signal)
+            i += 1
+            self.log("%d - %s" % (i, str(signal)))
+         
+
+#          update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+#            with tf.control_dependencies(update_ops):
+#                train_op = optimizer.minimize(loss)
 
     def train(self):
         self.log("******* Starting training procedure...")
         it_t, it_v = self.setup_input_pipes()
         next_t = it_t.get_next()
         next_v = it_v.get_next()
+        self.build_network(next_t[0], next_t[1])
     
     def predict(self, outdir):
         pass
@@ -266,6 +366,12 @@ if __name__ == '__main__':
             metavar="OUTPUT DIR")
     args.add_argument("-t", "--train", help="TRAINING TIME!", action="store_true")
 
+    # TODO add dataset frac argument 
+    
+    args.add_argument("--pipe_test", nargs="*", metavar="ARG", 
+            help="Test input pipe. Optional args: [1: fraction of input data to transform,\
+                    2: output directory]")
+
     FLAGS, unknown = args.parse_known_args()
     print(FLAGS)
     if FLAGS.train:
@@ -277,6 +383,18 @@ if __name__ == '__main__':
         with Trainer(FLAGS.dataset, FLAGS.checkpoint, FLAGS.logs,
                 FLAGS.tblogs) as trainer:
             trainer.predict(FLAGS.predict)
+    elif FLAGS.pipe_test is not None:
+        _args = dict()
+        if len(FLAGS.pipe_test) >= 1:
+            f = float(FLAGS.pipe_test[0])
+            f = 0 if f < 0 else 1 if f > 1 else f
+            _args['frac'] = f
+        if len(FLAGS.pipe_test) >= 2:
+            _args['out_dir'] = FLAGS.pipe_test[0]
+
+        with Trainer(FLAGS.dataset, FLAGS.checkpoint, FLAGS.logs,
+                FLAGS.tblogs) as trainer:
+            trainer.test_input_pipe(**_args)
     else:
         args.print_help()
 
