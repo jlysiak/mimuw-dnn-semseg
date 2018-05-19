@@ -284,13 +284,14 @@ class Trainer(object):
                 use_cudnn_on_gpu=True)
         
         def upconv2d(x, out_sz):
-            shape = [3, 3] + x.shape[1:2].as_list() + [out_sz]
+            shape = [3, 3] + [out_sz] + x.shape[1:2].as_list()
+            out_shape = [-1, out_sz] + [2 * x for x in x.shape[2:].as_list()]
             W = Trainer.weight_variable(shape)
-            return tf.nn.conv2d_transpose(x, W, 
-                strides=[1, 2, 2, 1], 
+            return tf.nn.conv2d_transpose(x, W,
+                output_shape = out_shape,
+                strides=[1, 1, 1, 1], 
                 padding='SAME',
-                data_format='NCHW', 
-                use_cudnn_on_gpu=True)
+                data_format='NCHW')
 
         def pool(x):
             k = [1, 1, 2, 2]
@@ -325,7 +326,17 @@ class Trainer(object):
             self.log("%d - %s" % (i, str(signal)))
 
         # Upsampling
-        for n in net_conf:
+        layers.reverse()
+        net_conf.reverse()
+        for layer, n in zip(layers[1:], net_conf[1:]):
+            signal = upconv2d(signal, n)
+            signal = tf.contrib.layers.batch_norm(signal,
+                scale=True,
+                center=True,
+                fused=True,
+                is_training=train_indicator,
+                activation_fn=tf.nn.relu)
+            signal = tf.concat([signal, layer], axis=1)
             signal = conv2d(signal, n)
             signal = tf.contrib.layers.batch_norm(signal,
                 scale=True,
@@ -333,11 +344,36 @@ class Trainer(object):
                 fused=True,
                 is_training=train_indicator,
                 activation_fn=tf.nn.relu)
-            signal = pool(signal)
-            layers.append(signal)
             i += 1
             self.log("%d - %s" % (i, str(signal)))
          
+        signal = upconv2d(signal, 64)
+        signal = tf.contrib.layers.batch_norm(signal,
+            scale=True,
+            center=True,
+            fused=True,
+            is_training=train_indicator,
+            activation_fn=tf.nn.relu)
+        print(signal)
+        signal = tf.concat([signal, x_iter], axis=1)
+        shape = [1, 1] + signal.shape[1:2].as_list() + [66]
+        W = Trainer.weight_variable(shape)
+        signal = tf.nn.conv2d(signal, W, 
+            strides=[1] * 4, 
+            padding='SAME',
+            data_format='NCHW', 
+            use_cudnn_on_gpu=True)
+        print(signal)
+        signal = tf.transpose(signal)
+
+        signal = tf.reshape(signal, [-1, 256 ** 2, 66])
+        labels = tf.reshape(signal, [-1, 256 ** 2, 66])
+        ops = tf.argmax(signal, axis=2)
+        lops = tf.argmax(labels, axis=2)
+        res = tf.cast(tf.equal(ops, lops), tf.float32)
+        res = tf.reduce_mean(res)
+        print(res)
+        return signal
 
 #          update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 #            with tf.control_dependencies(update_ops):
