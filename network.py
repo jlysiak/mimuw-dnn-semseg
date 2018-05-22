@@ -117,8 +117,7 @@ class Trainer(object):
         # Open images/labels and decode
         ds_examples = ds_files.map(
                 map_func=Trainer._to_raw_imgs,
-                num_parallel_calls=cores_count
-                ) 
+                num_parallel_calls=cores_count) 
         
         # Split into train and validation datasets
         ds_t = ds_examples.take(n_t)
@@ -145,8 +144,6 @@ class Trainer(object):
         x1 = np.random.uniform(0, 0.45, RANDOM_CROPS)
         x2 = np.random.uniform(0.55, 1, RANDOM_CROPS)
         _rand_boxes = np.array([y1, x1, y2, x2]).transpose()
-        print(_rand_boxes.shape)
-        print(_central_boxes.shape)
         boxes = np.concatenate((_rand_boxes, _central_boxes), axis=0)
 
         # Apply all croppings to each single element
@@ -199,6 +196,8 @@ class Trainer(object):
                     cycle_length=1,
                     block_length=trans_num)).apply(tf.contrib.data.unbatch())
 
+        ds_t = ds_t.map(lambda x, y: (x, tf.to_int32(y)))
+        ds_v = ds_v.map(lambda x, y: (x, tf.to_int32(y)))
 
         # ========================================
         # == Final cropping and scaling
@@ -255,28 +254,81 @@ class Trainer(object):
     def build_network(self, x_iter, y_iter):
         """
         Build neural network.
-        Change `NHWC` into `NCHW` for better performance
-        on GPUS.
         """
-        x_iter = tf.reshape(tf.transpose(x_iter), shape=[-1, 3, 256, 256])
-        with tf.device("/cpu:0"):
-            with tf.name_scope("network"):
-                return self._build_network(x_iter, y_iter)
+        #with tf.device("/gpu:0"):
+        with tf.name_scope("network"):
+            logits = self._build_network(x_iter)
+            
+        pred = tf.argmax(logits, axis=3, output_type=tf.int32)
+        acc = tf.reduce_mean(tf.cast(tf.equal(pred, y_iter), tf.float32))
+        self.log(pred)
 
-    def weight_variable(shape):
-        try:
-            stddev = np.prod(shape) ** (-0.5)
-        except:
-            stddev = np.prod(shape).value ** (-0.5)
-        initializer = tf.truncated_normal(shape, stddev=stddev)
-        return tf.Variable(initializer, name='weight')
-
-
-    def _build_network(self, x_iter, y_iter):
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=y_iter,
+                logits=logits)
         
+        # TRAINING OPS - within batch
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        with tf.control_dependencies(update_ops):
+            train_step = tf.train.MomentumOptimizer(0.02, 
+                   momentum=0.9).minimize(loss)
+         
+        
+        # VALIDATION OPS - cumulative across dataset
+
+        # We can take mean of means over batches beacuse 
+        # all batches has same size.
+        v_acc, v_acc_update = tf.metrics.mean(
+                values=acc,
+                name="valid/metrics/acc")
+        v_loss, v_loss_update = tf.metrics.mean(
+                values=loss,
+                name="valid/metrics/loss")
+
+        # Generate initializer for statistics over validation set
+        metrics_vars = []
+        for el in tf.get_collection(
+                tf.GraphKeys.LOCAL_VARIABLES,
+                scope="valid/metrics"):
+            metrics_vars.append(el)
+        metrics_init = tf.variables_initializer(var_list=metrics_vars)
+
+        # TRAIN OPS
+        self.t_step = train_step
+        self.t_loss = loss
+        self.t_acc = acc
+
+        # VALIDATION OPS
+        self.v_acc = v_acc
+        self.v_loss = v_loss
+        self.v_update = [v_acc_update, v_loss_update]
+        self.v_init = metrics_init
+
+    def _build_network(self, x_iter):
+        """
+        Change `NHWC` into `NCHW` for better performance on GPUS.
+        """
+
+        # == BUILDER HELPERS
+        def bnorm(x, ind, act=None):     
+            return tf.contrib.layers.batch_norm(x,
+                scale=True,
+                center=True,
+                fused=True,
+                is_training=ind,
+                activation_fn=act)
+
+        def weight_variable(shape):
+            try:
+                stddev = np.prod(shape) ** (-0.5)
+            except:
+                stddev = np.prod(shape).value ** (-0.5)
+            initializer = tf.truncated_normal(shape, stddev=stddev)
+            return tf.Variable(initializer, name='weight')
+
         def conv2d(x, out_sz):
             shape = [3, 3] + x.shape[1:2].as_list() + [out_sz]
-            W = Trainer.weight_variable(shape)
+            W = weight_variable(shape)
             return tf.nn.conv2d(x, W, 
                 strides=[1] * 4, 
                 padding='SAME',
@@ -286,10 +338,10 @@ class Trainer(object):
         def upconv2d(x, out_sz):
             shape = [3, 3] + [out_sz] + x.shape[1:2].as_list()
             out_shape = [-1, out_sz] + [2 * x for x in x.shape[2:].as_list()]
-            W = Trainer.weight_variable(shape)
+            W = weight_variable(shape)
             return tf.nn.conv2d_transpose(x, W,
                 output_shape = out_shape,
-                strides=[1, 1, 1, 1], 
+                strides=[1, 1, 2, 2], 
                 padding='SAME',
                 data_format='NCHW')
 
@@ -301,83 +353,73 @@ class Trainer(object):
                     padding='SAME',
                     data_format='NCHW')
 
-        signal = x_iter
-        layers = [signal]
-        i = 0
-        self.log("** Layers:")
-        self.log("%d - %s" % (i, str(signal)))
-        net_conf = [128, 256, 512, 1024, 2048, 4096, 2**13, 2**14]
+        # === NETWORK BUILDER 
         train_indicator = tf.Variable(True,
             trainable=False,
             name="TRAIN_INDICATOR")
+        
+        net_conf = [32, 64, 128, 256, 512, 1024, 2048, 4096]
+        x_iter = tf.reshape(tf.transpose(x_iter), shape=[-1, 3, 256, 256])
+        signal = x_iter
+        layers = [signal]
+        i = 0
+        
+        self.log("******* Layers:")
+        self.log("Input:")
+        self.log("%d - %s" % (i, str(signal)))
 
-        # === Downsampling part
+        self.log("** Downsampling layers")
         for n in net_conf:
-            signal = conv2d(signal, n)
-            signal = tf.contrib.layers.batch_norm(signal,
-                scale=True,
-                center=True,
-                fused=True,
-                is_training=train_indicator,
-                activation_fn=tf.nn.relu)
-            signal = pool(signal)
-            layers.append(signal)
             i += 1
-            self.log("%d - %s" % (i, str(signal)))
+            self.log("Layer: %d" % i)
+            signal = conv2d(signal, n)
+            self.log("%s" % str(signal))
+            signal = bnorm(signal, train_indicator, tf.nn.relu)
+            self.log("%s" % str(signal))
+            signal = pool(signal)
+            self.log("%s" % str(signal))
+            layers.append(signal)
 
-        # Upsampling
+        self.log("** Upsampling layers")
         layers.reverse()
         net_conf.reverse()
         for layer, n in zip(layers[1:], net_conf[1:]):
-            signal = upconv2d(signal, n)
-            signal = tf.contrib.layers.batch_norm(signal,
-                scale=True,
-                center=True,
-                fused=True,
-                is_training=train_indicator,
-                activation_fn=tf.nn.relu)
-            signal = tf.concat([signal, layer], axis=1)
-            signal = conv2d(signal, n)
-            signal = tf.contrib.layers.batch_norm(signal,
-                scale=True,
-                center=True,
-                fused=True,
-                is_training=train_indicator,
-                activation_fn=tf.nn.relu)
             i += 1
-            self.log("%d - %s" % (i, str(signal)))
-         
+            self.log("Layer: %d" % i)
+            signal = upconv2d(signal, n)
+            self.log("%s" % str(signal))
+            signal = bnorm(signal, train_indicator, tf.nn.relu)
+            self.log("%s" % str(signal))
+            signal = tf.concat([signal, layer], axis=1)
+            self.log("%s" % str(signal))
+            signal = conv2d(signal, n)
+            self.log("%s" % str(signal))
+            signal = bnorm(signal, train_indicator, tf.nn.relu)
+            self.log("%s" % str(signal))
+        
+        self.log("Output:")
         signal = upconv2d(signal, 64)
-        signal = tf.contrib.layers.batch_norm(signal,
-            scale=True,
-            center=True,
-            fused=True,
-            is_training=train_indicator,
-            activation_fn=tf.nn.relu)
-        print(signal)
+        self.log("%s" % str(signal))
+        signal = bnorm(signal, train_indicator, tf.nn.relu)
+        self.log("%s" % str(signal))
         signal = tf.concat([signal, x_iter], axis=1)
-        shape = [1, 1] + signal.shape[1:2].as_list() + [66]
-        W = Trainer.weight_variable(shape)
+        self.log(signal)
+        
+        shape = [3, 3] + signal.shape[1:2].as_list() + [66]
+        W = weight_variable(shape)
         signal = tf.nn.conv2d(signal, W, 
             strides=[1] * 4, 
             padding='SAME',
             data_format='NCHW', 
             use_cudnn_on_gpu=True)
-        print(signal)
-        signal = tf.transpose(signal)
-
-        signal = tf.reshape(signal, [-1, 256 ** 2, 66])
-        labels = tf.reshape(signal, [-1, 256 ** 2, 66])
-        ops = tf.argmax(signal, axis=2)
-        lops = tf.argmax(labels, axis=2)
-        res = tf.cast(tf.equal(ops, lops), tf.float32)
-        res = tf.reduce_mean(res)
-        print(res)
+        self.log("%s" % str(signal))
+        signal = bnorm(signal, train_indicator, tf.nn.relu)
+        self.log(signal)
+        signal = tf.transpose(signal, perm=[0, 2, 3, 1])
+        self.log(signal)
+        self.log("****** END OF BUILDER")
         return signal
 
-#          update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-#            with tf.control_dependencies(update_ops):
-#                train_op = optimizer.minimize(loss)
 
     def train(self):
         self.log("******* Starting training procedure...")
@@ -385,7 +427,43 @@ class Trainer(object):
         next_t = it_t.get_next()
         next_v = it_v.get_next()
         self.build_network(next_t[0], next_t[1])
-    
+        
+        saver = tf.train.Saver()
+        restore = True
+        if not os.path.exists(self.ckpt_path):
+            os.makedirs(self.ckpt_path)
+            restore = False
+
+        with tf.Session() as sess:
+            if restore:
+                try:
+                    saver.restore(sess, self.ckpt_path)
+                except:
+                    tf.global_variables_initializer().run()
+            else:
+                tf.global_variables_initializer().run()
+        
+            epochs = 1
+            batch_n = 0
+            self.log("**** TRAINING STARTED")
+            try:
+                for epoch in range(epochs):
+                    self.log("** Epoch: %d" % (epoch + 1))
+                    while True:
+                        t_loss, t_acc, _ = sess.run([self.t_loss, self.t_acc, self.t_step])
+                        batch_n += 1
+                        self.log("batch: %d, loss: %f, accuracy: %1.3f" % 
+                                    (batch_n, t_loss, t_acc))
+
+                        if batch_n % 100 == 0:
+                            self.log("**** VALIDATION")
+            except KeyboardInterrupt:
+                self.log("Training stopped by keyboard interrupt!")
+         
+
+
+
+
     def predict(self, outdir):
         pass
 
@@ -397,6 +475,9 @@ if __name__ == '__main__':
     args.add_argument("-c", "--checkpoint", help="Checkpoint directory")
     args.add_argument("-l", "--logs", help="Log file path")
     args.add_argument("-b", "--tblogs", help="Directory for TensorBoard logs")
+    args.add_argument("-r", "--lrate", help="Learning rate")
+    args.add_argument("-f", "--frac", help="Fraction of dataset taken.", 
+            default=1.0, type=float)
 
     args.add_argument("-p", "--predict", help="Generate predictions", 
             metavar="OUTPUT DIR")
