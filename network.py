@@ -95,18 +95,23 @@ class Trainer(object):
         imgs = os.listdir(self.dataset_images)
         labs = os.listdir(self.dataset_labels)
 
+        n = int(len(imgs) * frac)
+        if n < 2:
+            raise Exception("Not enough files in dataset...")
+        n_v = int(n * Trainer.VALID_DS_FRAC)
+        if n == n_v:
+            n_v -= 1
+        n_t = n - n_v
+        self.log("Examples in total: %d, train: %d, valid: %d" % (n, n_t, n_v))
+        
         # Prevent non-deterministic file listing
         imgs.sort()
         labs.sort()
-        imgs = [os.path.join(self.dataset_images, el) for el in imgs]
-        labs = [os.path.join(self.dataset_labels, el) for el in labs]
+        imgs = [os.path.join(self.dataset_images, el) for el in imgs[:n]]
+        labs = [os.path.join(self.dataset_labels, el) for el in labs[:n]]
        
         cores_count = max(multiprocessing.cpu_count() // 2, 1)
         self.log("Using %d cores in input pipe..." % cores_count)
-        n = len(imgs)
-        n_v = int(n * Trainer.VALID_DS_FRAC)
-        n_t = n - n_v
-        self.log("Examples in total: %d, train: %d, valid: %d" % (n, n_t, n_v))
 
         ds_imgs = Dataset.from_tensor_slices(imgs)
         ds_labs = Dataset.from_tensor_slices(labs)
@@ -198,7 +203,7 @@ class Trainer(object):
 
         ds_t = ds_t.map(lambda x, y: (x, tf.to_int32(y)))
         ds_v = ds_v.map(lambda x, y: (x, tf.to_int32(y)))
-
+        ds_t = ds_t.batch(Trainer.BATCH_SZ)
         # ========================================
         # == Final cropping and scaling
         it_t =  ds_t.make_initializable_iterator()
@@ -260,12 +265,15 @@ class Trainer(object):
             logits = self._build_network(x_iter)
             
         pred = tf.argmax(logits, axis=3, output_type=tf.int32)
+        y_iter = tf.reshape(y_iter, [-1, 256, 256])
+        
+        print(pred)
+        print(y_iter)
+       
         acc = tf.reduce_mean(tf.cast(tf.equal(pred, y_iter), tf.float32))
-        self.log(pred)
-
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+        loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=y_iter,
-                logits=logits)
+                logits=logits))
         
         # TRAINING OPS - within batch
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -327,31 +335,31 @@ class Trainer(object):
             return tf.Variable(initializer, name='weight')
 
         def conv2d(x, out_sz):
-            shape = [3, 3] + x.shape[1:2].as_list() + [out_sz]
+            shape = [3, 3] + x.shape[3:].as_list() + [out_sz] # changed
             W = weight_variable(shape)
             return tf.nn.conv2d(x, W, 
                 strides=[1] * 4, 
                 padding='SAME',
-                data_format='NCHW', 
+                data_format='NHWC',  # changed
                 use_cudnn_on_gpu=True)
         
         def upconv2d(x, out_sz):
-            shape = [3, 3] + [out_sz] + x.shape[1:2].as_list()
-            out_shape = [-1, out_sz] + [2 * x for x in x.shape[2:].as_list()]
+            shape = [3, 3] + [out_sz] + x.shape[3:].as_list() # changed
+            out_shape = [Trainer.BATCH_SZ] + [2 * x for x in x.shape[1:3].as_list()] + [out_sz] 
             W = weight_variable(shape)
             return tf.nn.conv2d_transpose(x, W,
                 output_shape = out_shape,
-                strides=[1, 1, 2, 2], 
+                strides=[1, 2, 2, 1], # NOTE 1 1 2 2 in NCHW
                 padding='SAME',
-                data_format='NCHW')
+                data_format='NHWC') # changed
 
         def pool(x):
-            k = [1, 1, 2, 2]
+            k = [1, 2, 2, 1] # changed
             return tf.nn.max_pool(x, 
                     ksize=k, 
                     strides=k, 
                     padding='SAME',
-                    data_format='NCHW')
+                    data_format='NHWC') # changed
 
         # === NETWORK BUILDER 
         train_indicator = tf.Variable(True,
@@ -359,7 +367,9 @@ class Trainer(object):
             name="TRAIN_INDICATOR")
         
         net_conf = [32, 64, 128, 256, 512, 1024, 2048, 4096]
-        x_iter = tf.reshape(tf.transpose(x_iter), shape=[-1, 3, 256, 256])
+        # _x_iter = tf.transpose(x_iter)
+        #x_iter = tf.reshape(x_iter, shape=[-1, 3, 256, 256])
+        x_iter = tf.reshape(x_iter, shape=[-1, 256, 256, 3])
         signal = x_iter
         layers = [signal]
         i = 0
@@ -390,7 +400,7 @@ class Trainer(object):
             self.log("%s" % str(signal))
             signal = bnorm(signal, train_indicator, tf.nn.relu)
             self.log("%s" % str(signal))
-            signal = tf.concat([signal, layer], axis=1)
+            signal = tf.concat([signal, layer], axis=3)
             self.log("%s" % str(signal))
             signal = conv2d(signal, n)
             self.log("%s" % str(signal))
@@ -401,48 +411,61 @@ class Trainer(object):
         signal = upconv2d(signal, 64)
         self.log("%s" % str(signal))
         signal = bnorm(signal, train_indicator, tf.nn.relu)
-        self.log("%s" % str(signal))
-        signal = tf.concat([signal, x_iter], axis=1)
+        self.log(signal)
+        signal = tf.concat([signal, x_iter], axis=3)
         self.log(signal)
         
-        shape = [3, 3] + signal.shape[1:2].as_list() + [66]
+        shape = [3, 3] + signal.shape[3:].as_list() + [66] # changed
         W = weight_variable(shape)
         signal = tf.nn.conv2d(signal, W, 
             strides=[1] * 4, 
             padding='SAME',
-            data_format='NCHW', 
+            data_format='NHWC', # changes
             use_cudnn_on_gpu=True)
-        self.log("%s" % str(signal))
+        self.log(signal)
         signal = bnorm(signal, train_indicator, tf.nn.relu)
         self.log(signal)
-        signal = tf.transpose(signal, perm=[0, 2, 3, 1])
+        #signal = tf.transpose(signal, perm=[0, 2, 3, 1])
         self.log(signal)
         self.log("****** END OF BUILDER")
         return signal
 
 
-    def train(self):
+    def train(self, files_frac=1.0):
+        """
+        Train model.
+        Args:
+            [files_frac]: fraction of files used in training
+        """
         self.log("******* Starting training procedure...")
-        it_t, it_v = self.setup_input_pipes()
+        it_t, it_v = self.setup_input_pipes(frac=files_frac)
         next_t = it_t.get_next()
         next_v = it_v.get_next()
+        
         self.build_network(next_t[0], next_t[1])
         
         saver = tf.train.Saver()
         restore = True
-        if not os.path.exists(self.ckpt_path):
-            os.makedirs(self.ckpt_path)
+        if not os.path.exists(self.ckpt_dir):
+            os.makedirs(self.ckpt_dir)
             restore = False
 
         with tf.Session() as sess:
+            self.log("Initialize training dataset...")
+            it_t.initializer.run()
+
             if restore:
                 try:
+                    self.log("Attempt to restore model from: %s" % self.ckpt_path)
                     saver.restore(sess, self.ckpt_path)
+                    self.log("DONE!")
                 except:
+                    self.log("Cannot restore... Initializing new variables")
                     tf.global_variables_initializer().run()
             else:
+                self.log("Initializing new network variables")
                 tf.global_variables_initializer().run()
-        
+
             epochs = 1
             batch_n = 0
             self.log("**** TRAINING STARTED")
@@ -459,7 +482,9 @@ class Trainer(object):
                             self.log("**** VALIDATION")
             except KeyboardInterrupt:
                 self.log("Training stopped by keyboard interrupt!")
-         
+            
+            save_path = saver.save(sess, self.ckpt_path)
+            self.log("Model saved as: %s" % save_path)
 
 
 
@@ -483,8 +508,6 @@ if __name__ == '__main__':
             metavar="OUTPUT DIR")
     args.add_argument("-t", "--train", help="TRAINING TIME!", action="store_true")
 
-    # TODO add dataset frac argument 
-    
     args.add_argument("--pipe_test", nargs="*", metavar="ARG", 
             help="Test input pipe. Optional args: [1: fraction of input data to transform,\
                     2: output directory]")
@@ -494,7 +517,7 @@ if __name__ == '__main__':
     if FLAGS.train:
         with Trainer(FLAGS.dataset, FLAGS.checkpoint, FLAGS.logs,
                 FLAGS.tblogs) as trainer:
-            trainer.train()
+            trainer.train(FLAGS.frac)
         
     elif FLAGS.predict is not None:
         with Trainer(FLAGS.dataset, FLAGS.checkpoint, FLAGS.logs,

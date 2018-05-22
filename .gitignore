@@ -108,3 +108,5 @@ outs
 labs
 training
 pipe_test
+checkpoint
+log.txt
