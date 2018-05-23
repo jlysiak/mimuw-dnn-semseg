@@ -52,6 +52,10 @@ class Trainer(object):
         self.log_file = open(self.log_path, "a")
 
         self.tb_dir = Trainer.DEF_TB_DIR if tb_dir is None else tb_dir
+        self.t_tb_writer = tf.summary.FileWriter(
+                os.path.join(self.tb_dir, "train"))
+        self.v_tb_writer = tf.summary.FileWriter(
+                os.path.join(self.tb_dir, "valid"))
         
         
     def __enter__(self):
@@ -234,11 +238,12 @@ class Trainer(object):
                 while True:
                     a, b = sess.run(next_t)
                     print(i, a.shape, b.shape)
-                    result = Image.fromarray(a.astype(np.uint8))
-                    result.save(os.path.join(t_outs, "%d-a.jpg" % i))
-                    result = Image.fromarray(b.astype(np.uint8).reshape(256,256), mode="L")
-                    result.save(os.path.join(t_outs, "%d-b.png" % i))
-                    i += 1
+                    for k in range(len(a)):
+                        result = Image.fromarray(a[k].astype(np.uint8))
+                        result.save(os.path.join(t_outs, "%d-a.jpg" % i))
+                        result = Image.fromarray(b[k].astype(np.uint8).reshape(256,256), mode="L")
+                        result.save(os.path.join(t_outs, "%d-b.png" % i))
+                        i += 1
             except tf.errors.OutOfRangeError:
                 print("End...")
 
@@ -247,6 +252,7 @@ class Trainer(object):
                 while True:
                     a, b = sess.run(next_v)
                     print(i, a.shape, b.shape)
+                    #for k in range(len(a)):
                     result = Image.fromarray(a.astype(np.uint8))
                     result.save(os.path.join(v_outs, "%d-a.jpg" % i))
                     result = Image.fromarray(b.astype(np.uint8).reshape(256,256), mode="L")
@@ -263,17 +269,26 @@ class Trainer(object):
         #with tf.device("/gpu:0"):
         with tf.name_scope("network"):
             logits = self._build_network(x_iter)
-            
         pred = tf.argmax(logits, axis=3, output_type=tf.int32)
+        
+        # Save one image, label and prediction from each batch
+        t_summaries = []
+        t_summaries += [tf.summary.image("train/imgs/label", 
+            tf.cast(y_iter, tf.uint8), max_outputs=1)]
+        t_summaries += [tf.summary.image("train/imgs/image", 
+            x_iter, max_outputs=1)]
+        t_summaries += [tf.summary.image("train/imgs/prediction", 
+            tf.cast(tf.reshape(pred, [-1, 256, 256, 1]), tf.uint8), max_outputs=1)]
+        
         y_iter = tf.reshape(y_iter, [-1, 256, 256])
         
-        print(pred)
-        print(y_iter)
-       
         acc = tf.reduce_mean(tf.cast(tf.equal(pred, y_iter), tf.float32))
         loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=y_iter,
                 logits=logits))
+        # Add batch loss and accuracy
+        t_summaries += [tf.summary.scalar("train/acc", acc)]
+        t_summaries += [tf.summary.scalar("train/loss", loss)]
         
         # TRAINING OPS - within batch
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -305,6 +320,7 @@ class Trainer(object):
         self.t_step = train_step
         self.t_loss = loss
         self.t_acc = acc
+        self.t_summaries = tf.summary.merge(t_summaries)
 
         # VALIDATION OPS
         self.v_acc = v_acc
@@ -473,10 +489,15 @@ class Trainer(object):
                 for epoch in range(epochs):
                     self.log("** Epoch: %d" % (epoch + 1))
                     while True:
-                        t_loss, t_acc, _ = sess.run([self.t_loss, self.t_acc, self.t_step])
+                        t_loss, t_acc, t_summ, _ = sess.run([
+                            self.t_loss, 
+                            self.t_acc, 
+                            self.t_summaries, 
+                            self.t_step])
                         batch_n += 1
                         self.log("batch: %d, loss: %f, accuracy: %1.3f" % 
                                     (batch_n, t_loss, t_acc))
+                        self.t_tb_writer.add_summary(t_summ, batch_n)
 
                         if batch_n % 100 == 0:
                             self.log("**** VALIDATION")
