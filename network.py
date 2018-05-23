@@ -262,13 +262,14 @@ class Trainer(object):
                 print("End...")
 
 
-    def build_network(self, x_iter, y_iter):
+    def build_network(self, x_iter, y_iter, use_gpu=False):
         """
         Build neural network.
         """
-        #with tf.device("/gpu:0"):
-        with tf.name_scope("network"):
-            logits = self._build_network(x_iter)
+        dev = "gpu" if use_gpu else "cpu"
+        with tf.device("/%s:0" % dev):
+            with tf.name_scope("network"):
+                logits = self._build_network(x_iter)
         pred = tf.argmax(logits, axis=3, output_type=tf.int32)
         
         # Save one image, label and prediction from each batch
@@ -382,7 +383,7 @@ class Trainer(object):
             trainable=False,
             name="TRAIN_INDICATOR")
         
-        net_conf = [32, 64, 128, 256, 512, 1024, 2048, 4096]
+        net_conf = [32, 64, 128, 256, 512, 1024]
         # _x_iter = tf.transpose(x_iter)
         #x_iter = tf.reshape(x_iter, shape=[-1, 3, 256, 256])
         x_iter = tf.reshape(x_iter, shape=[-1, 256, 256, 3])
@@ -447,7 +448,7 @@ class Trainer(object):
         return signal
 
 
-    def train(self, files_frac=1.0):
+    def train(self, files_frac=1.0, use_gpu=False):
         """
         Train model.
         Args:
@@ -458,7 +459,7 @@ class Trainer(object):
         next_t = it_t.get_next()
         next_v = it_v.get_next()
         
-        self.build_network(next_t[0], next_t[1])
+        self.build_network(next_t[0], next_t[1], use_gpu)
         
         saver = tf.train.Saver()
         restore = True
@@ -524,6 +525,7 @@ if __name__ == '__main__':
     args.add_argument("-r", "--lrate", help="Learning rate")
     args.add_argument("-f", "--frac", help="Fraction of dataset taken.", 
             default=1.0, type=float)
+    args.add_argument("--gpu", help="Use GPU", action="store_true")
 
     args.add_argument("-p", "--predict", help="Generate predictions", 
             metavar="OUTPUT DIR")
@@ -538,7 +540,7 @@ if __name__ == '__main__':
     if FLAGS.train:
         with Trainer(FLAGS.dataset, FLAGS.checkpoint, FLAGS.logs,
                 FLAGS.tblogs) as trainer:
-            trainer.train(FLAGS.frac)
+            trainer.train(FLAGS.frac, FLAGS.gpu)
         
     elif FLAGS.predict is not None:
         with Trainer(FLAGS.dataset, FLAGS.checkpoint, FLAGS.logs,
