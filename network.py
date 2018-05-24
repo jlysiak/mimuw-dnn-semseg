@@ -11,12 +11,14 @@ import numpy as np
 import math
 import os
 import argparse
-import matplotlib.pyplot as plt 
 import shutil
 import datetime
 import sys
 import multiprocessing
 
+import matplotlib
+matplotlib.use('agg')
+import matplotlib.pyplot as plt 
 from PIL import Image
 
 class Trainer(object):
@@ -67,7 +69,8 @@ class Trainer(object):
     def log(self, s):
         timestamp =  '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
         s = "[{:>19s}] {}\n".format(timestamp, s)
-        sys.stderr.write(s)
+        sys.stdout.write(s)
+	
         self.log_file.write(s)
 
     def setup_input_pipes(self, **kw):
@@ -141,8 +144,8 @@ class Trainer(object):
         # This could be done at each epoch but I don't have much more time...
         # NOTE Here I can do many crops from different places
         
-        RANDOM_CROPS = 10
-        CENTRAL_CROPS = 5
+        RANDOM_CROPS = 3
+        CENTRAL_CROPS = 3
         CROPS_N = RANDOM_CROPS + CENTRAL_CROPS
         CENTRAL_CROPS_LIST = np.linspace(0.5, 1, CENTRAL_CROPS)
         _list = [[0.5 - i/2, 0.5 - i/2, 0.5 + i/2, 0.5 + i/2] for i in CENTRAL_CROPS_LIST]
@@ -267,9 +270,12 @@ class Trainer(object):
         Build neural network.
         """
         dev = "gpu" if use_gpu else "cpu"
-        with tf.device("/%s:0" % dev):
+        train_indicator = tf.Variable(True,
+            trainable=False,
+            name="TRAIN_INDICATOR")
+        with tf.device("/device:GPU:0"):
             with tf.name_scope("network"):
-                logits = self._build_network(x_iter)
+                logits = self._build_network(x_iter, train_indicator)
         pred = tf.argmax(logits, axis=3, output_type=tf.int32)
         
         # Save one image, label and prediction from each batch
@@ -329,7 +335,7 @@ class Trainer(object):
         self.v_update = [v_acc_update, v_loss_update]
         self.v_init = metrics_init
 
-    def _build_network(self, x_iter):
+    def _build_network(self, x_iter, train_indicator):
         """
         Change `NHWC` into `NCHW` for better performance on GPUS.
         """
@@ -379,11 +385,8 @@ class Trainer(object):
                     data_format='NHWC') # changed
 
         # === NETWORK BUILDER 
-        train_indicator = tf.Variable(True,
-            trainable=False,
-            name="TRAIN_INDICATOR")
         
-        net_conf = [32, 64, 128, 256, 512, 1024]
+        net_conf = [64, 128, 256, 512, 1024]
         # _x_iter = tf.transpose(x_iter)
         #x_iter = tf.reshape(x_iter, shape=[-1, 3, 256, 256])
         x_iter = tf.reshape(x_iter, shape=[-1, 256, 256, 3])
@@ -466,8 +469,9 @@ class Trainer(object):
         if not os.path.exists(self.ckpt_dir):
             os.makedirs(self.ckpt_dir)
             restore = False
-
-        with tf.Session() as sess:
+        config = tf.ConfigProto(
+		allow_soft_placement=True)
+        with tf.Session(config=config) as sess:
             self.log("Initialize training dataset...")
             it_t.initializer.run()
 
@@ -502,6 +506,8 @@ class Trainer(object):
 
                         if batch_n % 100 == 0:
                             self.log("**** VALIDATION")
+                        if batch_n == 50000: 
+                            break
             except KeyboardInterrupt:
                 self.log("Training stopped by keyboard interrupt!")
             
