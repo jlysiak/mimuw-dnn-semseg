@@ -110,3 +110,5 @@ training
 pipe_test
 checkpoint
 log.txt
+*_pipe_test
+net_conf.json
