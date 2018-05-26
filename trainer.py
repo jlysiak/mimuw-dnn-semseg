@@ -188,7 +188,7 @@ class Trainer(object):
         # TRAINING OPS - within batch
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
-            train_step = tf.train.MomentumOptimizer(conf.LEARNING_RATE, 
+            train_step = tf.train.RMSPropOptimizer(conf.LEARNING_RATE, 
                    momentum=0.9).minimize(loss)
         
         # VALIDATION OPS - cumulative across dataset
@@ -266,6 +266,7 @@ class Trainer(object):
 
             epochs = 1
             batch_n = 0
+            feed = {self.indicator: True}
             log("**** TRAINING STARTED")
             try:
                 for epoch in range(epochs):
@@ -273,20 +274,26 @@ class Trainer(object):
                     try:
                         while True:
                             # Feed training indicator 
-                            feed = {self.indicator: True}
-                            t_loss, t_acc, t_summ, _ = sess.run([
+                            t_loss, t_acc, _ = sess.run([
                                 self.t_loss, 
                                 self.t_acc, 
-                                self.t_summaries, 
                                 self.t_step],
                                 feed_dict=feed)
                             batch_n += 1
                             log("batch: %d, loss: %f, accuracy: %1.3f" % 
                                         (batch_n, t_loss, t_acc))
-                            self.t_tb_writer.add_summary(t_summ, batch_n)
 
-                            if batch_n % 100 == 0:
-                                log("**** VALIDATION")
+                            if batch_n % 500 == 0:
+                                t_loss, t_acc, t_summ, _ = sess.run([
+                                    self.t_loss, 
+                                    self.t_acc, 
+                                    self.t_summaries, 
+                                    self.t_step],
+                                    feed_dict=feed)
+                                self.t_tb_writer.add_summary(t_summ, batch_n)
+                                batch_n += 1
+                                log("batch: %d, loss: %f, accuracy: %1.3f" % 
+                                            (batch_n, t_loss, t_acc))
                     
                     except tf.errors.OutOfRangeError:
                         log("** End of dataset!")

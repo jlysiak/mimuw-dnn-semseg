@@ -61,8 +61,13 @@ def _apply_upconv(x, conf, dfmt, batch_size):
             batch_size=batch_size)
 
 
-def _apply_resize(x, new_size, dfmt):
+def _apply_resize(x, conf, dfmt):
     apply_trans = True if dfmt == 'NCHW' else False
+    l = len(conf)
+    if l > 0:
+        new_size = conf[0]
+    else:
+        raise Exception("No new image size given!")
     if apply_trans: 
         x = tf.transpose(x, perm=[0, 3, 1, 2])
     x = tf.image.resize_nearest_neighbor(x,

@@ -21,63 +21,108 @@ DEFAULT_CONF = {
     "BATCH_SZ" : 16,
     "INPUT_SZ" : 256,
     "OUTPUT_SZ" : 256,
+    "TIME_LIMIT": "11:50:00",
    
     # Dataset augumentation
     "RANDOM_CROPS" : 3,
     "CENTRAL_CROPS" : 3,
 
     "ARCHITECTURE": [
+        # input -> 256 x 256 x 3
         ['conv', 32],
+        ['bnorm'],
         ['relu'],
 
         ['conv', 64],
         ['bnorm'],
-        ['relu:0'], # 256 x 256 x 64
-        ['pool'],
+        ['relu'], 
 
-        ['conv'],
+        ['conv', 64],
         ['bnorm'],
-        ['relu:1'], # 128 x 128 x 64 
-        ['pool'],
-        
+        ['relu:0'], 
+
+        ['pool'],   # 128 x 128 x 64
+
         ['conv', 128],
         ['bnorm'],
-        ['relu:2'], # 64 x 64 x 128
-        ['pool'],
-        
-        ['conv'],
-        ['bnorm'],
-        ['relu:3'], # 32 x 32 x 128
-        ['pool'],
+        ['relu'],  
 
         ['conv'],
         ['bnorm'],
-        ['relu'], # 16 x 16 x 128
+        ['relu:1'], 
 
-        ['upconv'], # 32 x 32 x 128 
-        ['concat', 3], # 32 x 32 x 256
-        ['conv', 128], # 32 x 32 x 128
+        ['pool'],   # 64 x 64 x 128
+        
+        ['conv'],
+        ['bnorm'],
+        ['relu:3'], 
+        
+        ['conv', 256],
+        ['bnorm'],
+        ['relu:2'], 
+
+        ['pool'],   # 32 x 32 x 256
+        
+        ['conv', 512],
         ['bnorm'],
         ['relu'],
 
-        ['upconv'], # 64 x 64 x 128
-        ['concat', 2], # 64 x 64 x 256
-        ['conv', 128],
+        ['conv'],
+        ['bnorm'],
+        ['relu'],
+
+        ['pool'],   # 16 x 16 x 512
+
+        ['conv'],
+        ['bnorm'],
+        ['relu'], 
+
+        ['conv'],
+        ['bnorm'],
+        ['relu:4'], # 16 x 16 x  512
+
+        ['pool'],
+        
+        ['conv', 1024],
+        ['bnorm'],
+        ['relu'],   # 8 x 8 x 1024
+
+        ['resize', 16], # 16 x 16 x 1024
+        ['conv', 512, 1], # 16 x 16 x 512
+        ['concat', 4], # 16 x 16 x 1024
+
+        ['conv', 512, 1], # 16 x 16 x 512
         ['bnorm'],
         ['relu'],
         
-        ['upconv', 128], # 128 x 128 x 128
-        ['concat', 1], # 128 x 128 x 192
-        ['conv', 128], # 128 x 128 x 128
+        ['conv', 256, 1], # 16 x 16 x 256
         ['bnorm'],
         ['relu'],
 
-        ['upconv'], # 256 x 256 x 128
-        ['concat', 0], # 256 x 256 x 192
-        ['conv', 128], # 256 x 256 x 128
+        ['resize', 64], # 64 x 64 x 256
+        ['concat', 3], # 64 x 64 x (256+128)
+        ['conv', 128, 1],
         ['bnorm'],
         ['relu'],
-        ['conv', 66] # 256 x 256 x 66 <-= logits
+        
+        ['conv', 128, 1],
+        ['bnorm'],
+        ['relu'],
+        
+        ['conv', 64, 1],
+        ['bnorm'],
+        ['relu'],
+
+        ['resize', 256], # 256 x 256 x 64
+        ['conv', 64, 1],
+        ['bnorm'],
+        ['relu'],
+        ['concat', 0], # 256 x 256 x 128
+        ['conv', 128, 1], 
+        ['bnorm'],
+        ['relu'],
+
+        ['conv', 66, 1] # 256 x 256 x 66 <-= logits
     ]
 }
 
