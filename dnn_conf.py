@@ -15,13 +15,14 @@ DEFAULT_CONF = {
     "VALID_DS_FRAC" : 0.05,
     "VALID_DS_FILE_LIMIT": 500,
     "DS_FRAC": 1.0,
-    "LEARNING_RATE" : 0.02,
+    "LEARNING_RATE" : 0.0005,
     "DEVICE": "CPU",
     "DATA_FORMAT": "NHWC",
     "BATCH_SZ" : 16,
     "INPUT_SZ" : 256,
     "OUTPUT_SZ" : 256,
-    "TIME_LIMIT": "11:50:00",
+    "TIME_LIMIT": "11:50:00", # If `00:00:00` -> no time limit
+    "EPOCHS" : 1,
    
     # Dataset augumentation
     "RANDOM_CROPS" : 3,
@@ -123,7 +124,24 @@ DEFAULT_CONF = {
         ['relu'],
 
         ['conv', 66, 1] # 256 x 256 x 66 <-= logits
-    ]
+    ],
+    
+    # Validation phase configuration
+    "VALIDATION": {
+        # np.linspace(0.5, 1, CENTRAL_CROPS)
+        "CENTRAL_CROPS" : 3,            
+        # Auxilary crops used in validation pipe data augumentation 
+        # List of normalized coordinates [x1, y1, x2, y2]
+        "AUX_CROPS" : [
+            [0, 0, 0.5, 0.5],
+            [0.5, 0, 1, 0.5],
+            [0, 0.5, 0.5, 1],
+            [0.5, 0.5, 1, 1],
+            [0.2, 0.1, 0.9, 0.7],
+            [0.1, 0.3, 0.6, 0.8]
+        ],
+        "FLIP_LR" : True
+    }
 }
 
 # ============= CONFIG FILE OPS
@@ -132,7 +150,7 @@ def create_default(path):
     """
     Create default network configuration.
     """
-    s = json.dumps(DEFAULT_CONF, indent=4)
+    s = json.dumps(DEFAULT_CONF, sort_keys=True, indent=4)
     with open(path, 'w') as f:
         f.write(s)
 

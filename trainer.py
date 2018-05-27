@@ -4,6 +4,7 @@ import math
 import os
 import shutil
 import datetime
+import time
 import sys
 from PIL import Image
 
@@ -14,10 +15,10 @@ import matplotlib.pyplot as plt
 import net_builder
 import pipe_train
 
+
 class CONF:
     def __init__(self, kw):
         self.__dict__ = kw
-
 
 class Trainer(object):
     """
@@ -44,6 +45,12 @@ class Trainer(object):
                 os.path.join(conf.TB_DIR, stamp, "train"))
         self.v_tb_writer = tf.summary.FileWriter(
                 os.path.join(conf.TB_DIR, stamp, "valid"))
+
+        time_end = time.time() + self.to_sec(conf.TIME_LIMIT)
+        config['TIME_END'] = time_end
+        config['TIMESTAMP_END'] =  time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time_end))
+        config['TIME_START'] = time.time() 
+
         self.config = config
 
 
@@ -54,10 +61,31 @@ class Trainer(object):
     def __exit__(self, exc_type, exc_value, traceback):
         self.log_file.close()
 
+    def to_sec(self, timestr):
+        """
+        Converts `hh:mm:ss` to duration in seconds.
+        """
+        print(timestr)
+        ts = [i for i in map(int, timestr.split(":"))]
+        print(ts)
+        l = len(ts)
+        k = 1
+        sec = 0
+        ts.reverse()
+        for v in ts:
+            sec += v * k
+            k *= 60
+        return sec
 
     def log(self, s):
         timestamp =  '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
-        s = "[{:>19s}] {}\n".format(timestamp, s)
+        elapsed = time.time() - self.config['TIME_START']
+        h = int(elapsed // 3600)
+        m = int((elapsed // 60) % 60)
+        sec = int(elapsed % 60)
+
+        s = "[{:>19s} | {:02d}:{:02d}:{:02d}] {}\n".format(timestamp, h, m, sec,s)
+        
         sys.stderr.write(s)        
         self.log_file.write(s)
 
@@ -249,8 +277,6 @@ class Trainer(object):
         config = tf.ConfigProto(
 		allow_soft_placement=True)
         with tf.Session(config=config) as sess:
-            log("Initialize training dataset...")
-            it_t.initializer.run()
 
             if restore:
                 try:
@@ -264,24 +290,21 @@ class Trainer(object):
                 log("Initializing new network variables")
                 tf.global_variables_initializer().run()
 
-            epochs = 1
             batch_n = 0
             feed = {self.indicator: True}
             log("**** TRAINING STARTED")
+            log("Training time limit: %s" % conf.TIMESTAMP_END)
             try:
-                for epoch in range(epochs):
+                for epoch in range(conf.EPOCHS):
+                    log("Initialize training dataset...")
+                    it_t.initializer.run()
+
                     log("** Epoch: %d" % (epoch + 1))
                     try:
                         while True:
                             # Feed training indicator 
-                            t_loss, t_acc, _ = sess.run([
-                                self.t_loss, 
-                                self.t_acc, 
-                                self.t_step],
-                                feed_dict=feed)
+                            sess.run(self.t_step, feed_dict=feed)
                             batch_n += 1
-                            log("batch: %d, loss: %f, accuracy: %1.3f" % 
-                                        (batch_n, t_loss, t_acc))
 
                             if batch_n % 500 == 0:
                                 t_loss, t_acc, t_summ, _ = sess.run([
@@ -294,14 +317,24 @@ class Trainer(object):
                                 batch_n += 1
                                 log("batch: %d, loss: %f, accuracy: %1.3f" % 
                                             (batch_n, t_loss, t_acc))
+                            
+                            # Check time limit
+                            if time.time() > conf.TIME_END:
+                                log("Training interrupted by reaching time limit.")
+                                break
                     
                     except tf.errors.OutOfRangeError:
                         log("** End of dataset!")
+
+                    # Save model after each epoch
+                    save_path = saver.save(sess, conf.CKPT_PATH)
+                    log("Model saved as: %s" % save_path)
+
             except KeyboardInterrupt:
                 log("Training stopped by keyboard interrupt!")
-            
-            save_path = saver.save(sess, conf.CKPT_PATH)
-            log("Model saved as: %s" % save_path)
+                # Save model when training was interrupted by user 
+                save_path = saver.save(sess, conf.CKPT_PATH)
+                log("Model saved as: %s" % save_path)
 
     def predict(self, outdir):
         pass
