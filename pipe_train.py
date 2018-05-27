@@ -126,6 +126,7 @@ def setup_train_valid_pipes(config, log):
             cycle_length=T_CROPS_N,
             block_length=1).apply(tf.contrib.data.unbatch())
 
+    v_trans_num = V_CROPS_N
     ds_v = ds_v.interleave(
             map_func=lambda x, y: Dataset.from_tensors((
                 tf.image.crop_and_resize(x, v_boxes, v_boxes_ind, in_size),
@@ -154,6 +155,7 @@ def setup_train_valid_pipes(config, log):
 
     # === VALIDATION PIPE 
     if vconfig.FLIP_LR:
+        v_trans_num *= 2
         ds_v = ds_v.batch(1)
         ds_v = ds_v.apply(
                 tf.contrib.data.parallel_interleave(
@@ -173,4 +175,4 @@ def setup_train_valid_pipes(config, log):
 
     it_t =  ds_t.make_initializable_iterator()
     it_v =  ds_v.make_initializable_iterator()
-    return it_t, it_v
+    return it_t, it_v, v_trans_num

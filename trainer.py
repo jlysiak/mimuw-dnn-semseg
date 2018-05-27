@@ -77,6 +77,7 @@ class Trainer(object):
             k *= 60
         return sec
 
+
     def log(self, s):
         timestamp =  '{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
         elapsed = time.time() - self.config['TIME_START']
@@ -127,7 +128,7 @@ class Trainer(object):
         if not os.path.exists(v_outs):
             os.makedirs(v_outs)
 
-        log("******* Input pipe test")
+        log('******* Input pipe test')
         it_t, it_v = self.setup_pipe()
         next_t = it_t.get_next()
         next_v = it_v.get_next()
@@ -228,7 +229,10 @@ class Trainer(object):
         v_loss, v_loss_update = tf.metrics.mean(
                 values=loss,
                 name="valid/metrics/loss")
-
+        v_summaries = [] 
+        v_summaries += [tf.summary.scalar("valid/loss", v_loss)]
+        v_summaries += [tf.summary.scalar("valid/acc", v_acc)]
+        
         # Generate initializer for statistics over validation set
         metrics_vars = []
         for el in tf.get_collection(
@@ -244,12 +248,61 @@ class Trainer(object):
         self.t_summaries = tf.summary.merge(t_summaries)
 
         # VALIDATION OPS
-        self.v_acc = v_acc
-        self.v_loss = v_loss
+        self.v_loss = loss
+        self.v_acc = acc
+        self.v_acc_cum = v_acc
+        self.v_loss_cum = v_loss
         self.v_update = [v_acc_update, v_loss_update]
         self.v_init = metrics_init
+        self.v_summaries = tf.summary.merge(v_summaries)
         # PHASE INDICATOR 
         self.indicator = train_indicator
+
+    def validate(self, sess, it_v, vfeed, batch_n, trans_num):
+        """
+        This method is called within train main loop inside keyboard interrupt
+        try-catch.
+        """
+        # Initialize validation pipeline
+        log = lambda x: self.log(x)
+        it_v.initializer.run()
+        self.v_init.run()
+        log("** Begin validation @ %d" % batch_n)
+        log("AVG over %d augumentations" % trans_num)
+        imgs = []
+        i = 0
+        ls = 0
+        acs = 0
+        try:
+            while True:
+                # Calculate image average
+                v_loss, v_acc, _ = sess.run([
+                    self.v_loss, 
+                    self.v_acc, 
+                    self.v_update],
+                    feed_dict=vfeed)
+                i += 1
+                ls += v_loss
+                acs += v_acc
+                if i == trans_num:
+                    imgs.append((ls / trans_num, acs / trans_num))
+                    i = 0
+                    ls = 0
+                    acs = 0
+                    log("Image %d:" % len(imgs), imgs[-1])
+        
+        except tf.errors.OutOfRangeError:
+            log("** End of validation dataset!")
+        # Get cumulative loss and accyract over VALID set
+        v_loss, v_acc, v_summ = sess.run([
+            self.v_loss_cum, 
+            self.v_acc_cum, 
+            self.v_summaries],
+            feed_dict=vfeed)
+        
+        self.v_tb_writer.add_summary(v_summ, batch_n)
+        log("Validation results after %d batches: loss=%f acc=%1.3f" % 
+                (batch_n, v_loss, v_acc))
 
 
     def train(self):
@@ -262,7 +315,7 @@ class Trainer(object):
         log = lambda x: self.log(x)
         
         log("******* Starting training procedure...")
-        it_t, it_v = self.setup_pipe()
+        it_t, it_v, v_trans_num = self.setup_pipe()
         next_t = it_t.get_next()
         next_v = it_v.get_next()
         
@@ -289,9 +342,10 @@ class Trainer(object):
             else:
                 log("Initializing new network variables")
                 tf.global_variables_initializer().run()
-
+            
             batch_n = 0
             feed = {self.indicator: True}
+            valid_feed = {self.indicator: False}
             log("**** TRAINING STARTED")
             log("Training time limit: %s" % conf.TIMESTAMP_END)
             try:
@@ -301,11 +355,9 @@ class Trainer(object):
 
                     log("** Epoch: %d" % (epoch + 1))
                     try:
+                        self.validate(sess, it_v, valid_feed, batch_n, v_trans_num)
                         while True:
-                            # Feed training indicator 
-                            sess.run(self.t_step, feed_dict=feed)
                             batch_n += 1
-
                             if batch_n % 500 == 0:
                                 t_loss, t_acc, t_summ, _ = sess.run([
                                     self.t_loss, 
@@ -314,9 +366,14 @@ class Trainer(object):
                                     self.t_step],
                                     feed_dict=feed)
                                 self.t_tb_writer.add_summary(t_summ, batch_n)
-                                batch_n += 1
                                 log("batch: %d, loss: %f, accuracy: %1.3f" % 
                                             (batch_n, t_loss, t_acc))
+                            else:
+                                # Feed training indicator 
+                                sess.run(self.t_step, feed_dict=feed)
+
+                            if batch_n % conf.VALIDATION_IVAL == 0:
+                                self.validate(sess, it_v, valid_feed, batch_n, v_trans_num)
                             
                             # Check time limit
                             if time.time() > conf.TIME_END:

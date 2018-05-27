@@ -21,8 +21,9 @@ DEFAULT_CONF = {
     "BATCH_SZ" : 16,
     "INPUT_SZ" : 256,
     "OUTPUT_SZ" : 256,
-    "TIME_LIMIT": "11:50:00", # If `00:00:00` -> no time limit
+    "TIME_LIMIT": "11:50:00", 
     "EPOCHS" : 1,
+    "VALIDATION_IVAL" : 500,
    
     # Dataset augumentation
     "RANDOM_CROPS" : 3,
