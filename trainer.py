@@ -190,7 +190,7 @@ class Trainer(object):
                 name="TRAIN_INDICATOR")
         dev = "/device:%s:0" % conf.DEVICE 
         with tf.device(dev):
-            with tf.variable_scope("network"):
+            with tf.name_scope("network"):
                 # Network builder chnges data format if needed
                 # but returns NHWC
                 logits = net_builder.build_network(
