@@ -111,6 +111,17 @@ class Trainer(object):
             valid_outs="validation"):
         pass
 
+
+    def make_test_net(self, train_next, valid_next):
+        indicator = tf.placeholder(
+                dtype=tf.bool,
+                name="INDICATOR")
+        signal = tf.case(
+                [(indicator, lambda: train_next)],
+                default=lambda: valid_next)
+        return signal, indicator
+
+
     def test_train_pipe(self, 
             out_dir="pipe_test", 
             train_outs="training", 
@@ -129,7 +140,7 @@ class Trainer(object):
             os.makedirs(v_outs)
 
         log('******* Input pipe test')
-        it_t, it_v = self.setup_pipe()
+        it_t, it_v, v_trans_num = self.setup_pipe()
         next_t = it_t.get_next()
         next_v = it_v.get_next()
          
@@ -153,11 +164,13 @@ class Trainer(object):
                 i = 0
                 while True:
                     a, b = sess.run(next_v)
-                    print(i, a.shape, b.shape)
+                    imgn = i // v_trans_num
+                    transn = i % v_trans_num
+                    print(i, imgn, transn, a.shape, b.shape)
                     result = Image.fromarray(a.astype(np.uint8))
-                    result.save(os.path.join(v_outs, "%d-a.jpg" % i))
+                    result.save(os.path.join(v_outs, "%d-%d-a.jpg" % (imgn, transn)))
                     result = Image.fromarray(b.astype(np.uint8).reshape(256,256), mode="L")
-                    result.save(os.path.join(v_outs, "%d-b.png" % i))
+                    result.save(os.path.join(v_outs, "%d-%d-b.png" % (imgn, transn)))
                     i += 1
             except tf.errors.OutOfRangeError:
                 print("End...")
@@ -172,17 +185,12 @@ class Trainer(object):
         
         log("**** BUILDING NETWORK")
         
-        #train_indicator = tf.placeholder_with_default(
-        #        input=True, 
-        #        shape=[0],
-        #        name="TRAIN_INDICATOR")
         train_indicator = tf.placeholder(
                 dtype=tf.bool,
                 name="TRAIN_INDICATOR")
-
         dev = "/device:%s:0" % conf.DEVICE 
         with tf.device(dev):
-            with tf.name_scope("network"):
+            with tf.variable_scope("network"):
                 # Network builder chnges data format if needed
                 # but returns NHWC
                 logits = net_builder.build_network(
@@ -258,14 +266,14 @@ class Trainer(object):
         # PHASE INDICATOR 
         self.indicator = train_indicator
 
-    def validate(self, sess, it_v, vfeed, batch_n, trans_num):
+    def validate(self, sess, it_v_init, it_v_next, x, y, batch_n, trans_num):
         """
         This method is called within train main loop inside keyboard interrupt
         try-catch.
         """
         # Initialize validation pipeline
         log = lambda x: self.log(x)
-        it_v.initializer.run()
+        it_v_init.run()
         self.v_init.run()
         log("** Begin validation @ %d" % batch_n)
         log("AVG over %d augumentations" % trans_num)
@@ -275,6 +283,12 @@ class Trainer(object):
         acs = 0
         try:
             while True:
+                x_val, y_val = sess.run(it_v_next)
+                vfeed = {
+                    x: x_val,
+                    y: y_val,
+                    self.indicator: False
+                }
                 # Calculate image average
                 v_loss, v_acc, _ = sess.run([
                     self.v_loss, 
@@ -289,7 +303,7 @@ class Trainer(object):
                     i = 0
                     ls = 0
                     acs = 0
-                    log("Image %d:" % len(imgs), imgs[-1])
+                    log("Image %d: loss=%f acc=%1.4f" % (len(imgs), imgs[-1][0], imgs[-1][1]))
         
         except tf.errors.OutOfRangeError:
             log("** End of validation dataset!")
@@ -319,7 +333,14 @@ class Trainer(object):
         next_t = it_t.get_next()
         next_v = it_v.get_next()
         
-        self.build_network(next_t[0], next_t[1])
+        x = tf.placeholder(
+                dtype=tf.float32,
+                name="NET_INPUT")
+        y = tf.placeholder(
+                dtype=tf.int32,
+                name="LABELS")
+        
+        self.build_network(x, y)
         
         saver = tf.train.Saver()
         restore = True
@@ -344,8 +365,7 @@ class Trainer(object):
                 tf.global_variables_initializer().run()
             
             batch_n = 0
-            feed = {self.indicator: True}
-            valid_feed = {self.indicator: False}
+            is_over = False
             log("**** TRAINING STARTED")
             log("Training time limit: %s" % conf.TIMESTAMP_END)
             try:
@@ -355,9 +375,14 @@ class Trainer(object):
 
                     log("** Epoch: %d" % (epoch + 1))
                     try:
-                        self.validate(sess, it_v, valid_feed, batch_n, v_trans_num)
                         while True:
                             batch_n += 1
+                            x_val, y_val = sess.run(next_t)
+                            feed = {
+                                x: x_val,
+                                y: y_val,
+                                self.indicator: True
+                            }
                             if batch_n % 500 == 0:
                                 t_loss, t_acc, t_summ, _ = sess.run([
                                     self.t_loss, 
@@ -373,11 +398,12 @@ class Trainer(object):
                                 sess.run(self.t_step, feed_dict=feed)
 
                             if batch_n % conf.VALIDATION_IVAL == 0:
-                                self.validate(sess, it_v, valid_feed, batch_n, v_trans_num)
+                                self.validate(sess, it_v.initializer, next_v, x, y, batch_n, v_trans_num)
                             
                             # Check time limit
                             if time.time() > conf.TIME_END:
                                 log("Training interrupted by reaching time limit.")
+                                is_over = True
                                 break
                     
                     except tf.errors.OutOfRangeError:
@@ -386,6 +412,10 @@ class Trainer(object):
                     # Save model after each epoch
                     save_path = saver.save(sess, conf.CKPT_PATH)
                     log("Model saved as: %s" % save_path)
+
+                    # Exit when time limit exceeded
+                    if is_over:
+                        return
 
             except KeyboardInterrupt:
                 log("Training stopped by keyboard interrupt!")

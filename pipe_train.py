@@ -172,6 +172,7 @@ def setup_train_valid_pipes(config, log):
 
     # Create final batches
     ds_t = ds_t.batch(config.BATCH_SZ)
+    ds_t = ds_t.prefetch(buffer_size=config.BATCH_SZ * 2)
 
     it_t =  ds_t.make_initializable_iterator()
     it_v =  ds_v.make_initializable_iterator()
