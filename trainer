@@ -1,34 +1,42 @@
+#!/usr/bin/env python3.5
 """
 Deep Neural Networks @ MIMUW 2017/18
 Jacek Łysiak
 
-Semantic segmentation with convolutional network
+Semantic segmentation using convolutional network
 
 """
-import tensorflow as tf
 import argparse
 
-import trainer
-import dnn_conf
+from semseg import Trainer, defaults, create_default_config, load_config
 
-if __name__ == '__main__':
-    args = argparse.ArgumentParser(description="Deep convolutional network\
-            for semantic segmentation - Deep Neural Networks @ MIMUW 2017")
+desc = """
+    Deep convolutional network for semantic segmentation
+    Deep Neural Networks @ MIMUW 2017
+"""
 
-    # ==== MODIFY DEFAULT CONFIGURATION
+def add_args_modify_conf(args):
+    """Default configuration modification options"""
+
     args.add_argument("-d", "--dataset", help="Dataset location", metavar="DIR")
     args.add_argument("-c", "--checkpoint", help="Checkpoint directory")
     args.add_argument("-l", "--logs", help="Log file path")
+    args.add_argument("-L", "--lock", help="Lock checkpoint file", action="store_true")
+    args.add_argument("-o", "--output", help="Output directory")
     args.add_argument("-b", "--tblogs", help="Directory for TensorBoard logs")
     args.add_argument("-r", "--lrate", help="Learning rate", type=float)
     args.add_argument("-f", "--frac", help="Fraction of dataset taken.", type=float)
     args.add_argument("--gpu", help="Use GPU", action="store_true")
 
+
+def add_args_create_load_conf(args):
     # ==== CREATE/LOAD CONFIGURATION
     args.add_argument("-C", "--config", help="Path to configuration file")
     args.add_argument("--new_config", help="Create new default configuration file", 
-            nargs="?", const=dnn_conf.DEFAULT_CONF_PATH)
-    
+            nargs="?", const=defaults.DEFAULT_CONF_PATH)
+
+
+def add_args_actions(args):
     # ==== ACTIONS 
     args.add_argument("--train_pipe_test", metavar="OUT", nargs="?", 
             const="train_pipe_test", help="Test input pipe and generate \
@@ -37,28 +45,17 @@ if __name__ == '__main__':
             const="pred_pipe_test", help="Test input pipe and generate \
                     imgs into `OUT` dir.")
     
-    args.add_argument("--predict", help="Generate predictions", 
-            metavar="OUTPUT DIR")
+    args.add_argument("--predict", help="Generate predictions for given data", 
+            metavar="PATH", nargs="*")
     args.add_argument("--train", help="TRAINING TIME!", action="store_true")
-    FLAGS, unknown = args.parse_known_args()
-    print(FLAGS)
 
-    if FLAGS.new_config is not None:
-        dnn_conf.create_default(FLAGS.new_config)
-        print("Network config created: " + FLAGS.new_config)
-        exit(0)
-    
-    if not FLAGS.train and FLAGS.predict is None \
-        and FLAGS.train_pipe_test is None and FLAGS.pred_pipe_test is None:
-        args.print_help()
-        exit(0)
 
+def load_and_update(FLAGS, conf_path):
     # Load configuration
-    conf_path = dnn_conf.DEFAULT_CONF_PATH
     if FLAGS.config is not None:
         conf_path = FLAGS.config
 
-    config = dnn_conf.load_conf(conf_path)
+    config = load_config(conf_path)
     
     # Update configuration using passed flags
     if FLAGS.dataset is not None:
@@ -75,19 +72,40 @@ if __name__ == '__main__':
         config["DS_FRAC"] = FLAGS.frac
     if FLAGS.gpu:
         config["DEVICE"] = "GPU"
+    config["LOCK"] = FLAGS.lock 
+    return config
+
+
+if __name__ == '__main__':
+    args = argparse.ArgumentParser(description=desc)
+    add_args_modify_conf(args)
+    add_args_create_load_conf(args)
+    add_args_actions(args)
+    FLAGS, unknown = args.parse_known_args()
+
+    if FLAGS.new_config is not None:
+        create_default_config(FLAGS.new_config)
+        print("Network config created: " + FLAGS.new_config)
+        exit(0)
+    
+    config = load_and_update(FLAGS, defaults.DEFAULT_CONF_PATH)
 
     # Run Trainer
-    with trainer.Trainer(config) as T:
-        if FLAGS.train:
+    if FLAGS.train:
+        with Trainer(config) as T:
             T.train()
-            
-        elif FLAGS.predict is not None:
-            T.predict(FLAGS.predict)
-
-        elif FLAGS.train_pipe_test is not None:
-            T.test_train_pipe(out_dir=FLAGS.train_pipe_test)
         
-        elif FLAGS.pred_pipe_test is not None:
-            T.test_pred_pipe(out_dir=FLAGS.pred_pipe_test)
+    elif FLAGS.predict is not None:
+        with Trainer(config) as T:
+            T.predict(FLAGS.predict, FLAGS.output)
+
+    elif FLAGS.train_pipe_test is not None:
+        with Trainer(config) as T:
+            pass 
+    elif FLAGS.pred_pipe_test is not None:
+        with Trainer(config) as T:
+            pass
+    else:
+        args.print_help()
 
 

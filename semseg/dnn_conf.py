@@ -1,10 +1,10 @@
 import json
 
-DEFAULT_CONF_PATH = "net_conf.json"
+_DEFAULT_CONF_PATH = "net_conf.json"
 
 # ======== DEFAULT CONFIGURATON
 # It's possible to annotate layers 
-DEFAULT_CONF = {
+_DEFAULT_CONF = {
     "DATASET_DIR" : "training",
     "CKPT_DIR" : "checkpoint",
     "CKPT_NAME" : "semseg.ckpt",
@@ -145,13 +145,17 @@ DEFAULT_CONF = {
     }
 }
 
-# ============= CONFIG FILE OPS
+
+class DEFAULT_VALUES:
+    DEFAULT_CONF_PATH = _DEFAULT_CONF_PATH
+    DEFAULT_CONF = _DEFAULT_CONF
+
 
 def create_default(path):
     """
     Create default network configuration.
     """
-    s = json.dumps(DEFAULT_CONF, sort_keys=True, indent=4)
+    s = json.dumps(_DEFAULT_CONF, sort_keys=True, indent=4)
     with open(path, 'w') as f:
         f.write(s)
 
@@ -163,13 +167,4 @@ def load_conf(path):
     with open(path, 'r') as f:
         r = f.read()
     return json.loads(r)
-
-
-if __name__ == "__main__":
-    print(s)
-    for k,v in s.items():
-        print(k, v)
-
-
-
 

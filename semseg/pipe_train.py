@@ -44,7 +44,7 @@ def setup_train_valid_pipes(config, log):
     imgs = [os.path.join(config.DATASET_IMAGES, el) for el in imgs[:n]]
     labs = [os.path.join(config.DATASET_LABELS, el) for el in labs[:n]]
    
-    cores_count = max(multiprocessing.cpu_count() // 2, 1)
+    cores_count = min(4, max(multiprocessing.cpu_count() // 2, 1))
     log("Using %d cores in parallel ops..." % cores_count)
 
     ds_imgs = Dataset.from_tensor_slices(imgs)
