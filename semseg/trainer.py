@@ -117,32 +117,11 @@ class Trainer(object):
         Args:
             [files_frac]: fraction of files used in training
         """
-        self._train_init()
-
         FLAGS = mkflags(self.config)
         log = lambda x: self.log(x)
 
-        # Get training data
-        imgs = os.listdir(FLAGS.DATASET_IMAGES)
-        labs = os.listdir(FLAGS.DATASET_LABELS)
-
-        n = int(len(imgs) * FLAGS.DS_FRAC)
-        if n < 10:
-            raise Exception("Not enough files in dataset...")
-        n_v = max(int(n * FLAGS.VALID_DS_FRAC), 2)
-        n_v = min(n - 1, n_v)
-        n_v = min(n_v, FLAGS.VALID_DS_FILE_LIMIT)
-        n_t = n - n_v
-        log("Examples in total: %d, train: %d, valid: %d" % (n, n_t, n_v))
-        
-        # Prevent non-deterministic file listing
-        imgs.sort()
-        labs.sort()
-        _ex = [i for i in zip(imgs, labs)]
-        shuffle(_ex)
-
-        imgs = [os.path.join(FLAGS.DATASET_IMAGES, el) for el, _ in _ex[:n]]
-        labs = [os.path.join(FLAGS.DATASET_LABELS, el) for _, el in _ex[:n]] 
+        imgs, labs, n_t = self._init()
+        self._init()
         
         log("** Starting training procedure...")
         t_init, t_next = setup_pipe("training", self.config, 
@@ -156,6 +135,8 @@ class Trainer(object):
         t_acc = extra['ACC']
         t_summaries = extra['T_SUMMARY']
         t_step = extra['TRAIN']
+        y_pred = extra['PRED_ORIG']
+        wnd_ph = extra['ORIG_SZ']
 
         self.show_layers(extra['LAYERS'])
 
@@ -213,12 +194,21 @@ class Trainer(object):
                                 sess.run(t_step, feed_dict=feed)
 
                             if batch_n % FLAGS.VALIDATION_IVAL == 0:
-                                pass # TODO validation!
-                                
+                                is_over, overall = self.validate(sess, v_init, v_next,
+                                        x_ph, wnd_ph, ind_ph, y_pred) 
+                                if overall is not None:
+                                    validation_summ = tf.Summary(value=[
+                                        tf.Summary.Value(tag="valid/acc", 
+                                            simple_value=overall)])
+                                    self.v_tb_writer.add_summary(
+                                            validation_summ, batch_n)
+
                             # Check time limit
                             if time.time() > FLAGS.TIME_END:
                                 log("Training interrupted by reaching time limit.")
                                 is_over = True
+
+                            if is_over:
                                 break
                     
                     except tf.errors.OutOfRangeError:
@@ -461,14 +451,22 @@ class Trainer(object):
         log("Total accuracy: %f" % (acc_cum / len(results)))
 
 
-    def validate(self, sess, v_init, v_next, x, y, batch_n, trans_num):
+    def validate(self, sess, v_init, v_next, x_ph, wnd_ph, ind_ph,y_pred):
         """
         This method is called within train main loop inside keyboard interrupt
         try-catch.
+        TODO - copy&pase due to lack of time...
         """
         FLAGS = mkflags(self.config)
         log = lambda x: self.log(x)
+        is_over = False
 
+        name = None
+        predictions = None
+        truth = None
+        counters = None
+
+    
         sess.run(v_init)
         i = 0
         j = 0
@@ -514,9 +512,16 @@ class Trainer(object):
 
         except KeyboardInterrupt:
             log("Interrupted by user...")
-        log("Final results: ")
-        acc_cum = 0
-        for name, acc in results:
-            log("%s - %f" % (name, acc))
-            acc_cum += acc
-        log("Total accuracy: %f" % (acc_cum / len(results)))
+            is_over = True
+        
+        overall = None
+        if len(results) > 0:
+            log("Final results: ")
+            acc_cum = 0
+            for name, acc in results:
+                log("%s - %f" % (name, acc))
+                acc_cum += acc
+            overall  = acc_cum / len(results)
+            log("Total accuracy: %f" % overall)
+
+        return is_over, overall

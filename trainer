@@ -28,6 +28,8 @@ def add_args_modify_conf(args):
     args.add_argument("-F", "--valid_frac", help="Fraction of training \
             dataset taken into validation part", type=float)
     args.add_argument("-m", "--valid_limit", help="Validation set files limit", type=int)
+    args.add_argument("-I", "--valid_interval", help="Validation interval \
+            in batches", type=int)
     args.add_argument("--gpu", help="Use GPU", action="store_true")
 
 
@@ -81,6 +83,8 @@ def load_and_update(FLAGS, conf_path):
         config["VALID_DS_FRAC"] = FLAGS.valid_frac
     if FLAGS.valid_limit is not None:
         config["VALID_DS_FILE_LIMIT"] = FLAGS.valid_limit
+    if FLAGS.valid_interval is not None:
+        config["VALIDATION_IVAL"] = FLAGS.valid_interval
     if FLAGS.gpu:
         config["DEVICE"] = "GPU"
     config["LOCK"] = FLAGS.lock 
@@ -110,19 +114,21 @@ if __name__ == '__main__':
         with Trainer(config) as T:
             T.predict(FLAGS.predict, FLAGS.output)
 
-    elif FLAGS.validate is not None:
+    elif FLAGS.validate:
         with Trainer(config) as T:
             T.validate_only(FLAGS.output)
 
     elif FLAGS.train_pipe_test is not None:
         with Trainer(config) as T:
-            pass 
+            pass # TODO
+
     elif FLAGS.test_valid_pipe is not None:
         with Trainer(config) as T:
             T.test_valid_pipe(FLAGS.test_valid_pipe) 
+
     elif FLAGS.pred_pipe_test is not None:
         with Trainer(config) as T:
-            pass
+            pass # TODO
     else:
         args.print_help()
 
