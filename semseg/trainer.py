@@ -9,7 +9,7 @@ import sys
 from random import shuffle
 
 from .utils import mkflags, to_sec, get_image_paths
-from .images import save_predictions, save_image
+from .images import save_predictions, save_image, calc_accuracy
 from .pipe import setup_pipe
 from .network import build_network
 
@@ -240,58 +240,7 @@ class Trainer(object):
                     save_path = saver.save(sess, FLAGS.CKPT_PATH)
                     log("Model saved as: %s" % save_path)
     
-    def validate(self, sess, it_v_init, it_v_next, x, y, batch_n, trans_num):
-        """
-        This method is called within train main loop inside keyboard interrupt
-        try-catch.
-        """
-        # Initialize validation pipeline
-        log = lambda x: self.log(x)
-        it_v_init.run()
-        self.v_init.run()
-        log("** Begin validation @ %d" % batch_n)
-        log("AVG over %d augumentations" % trans_num)
-        imgs = []
-        i = 0
-        ls = 0
-        acs = 0
-        try:
-            while True:
-                x_val, y_val = sess.run(it_v_next)
-                vfeed = {
-                    x: x_val,
-                    y: y_val,
-                    self.indicator: False
-                }
-                # Calculate image average
-                v_loss, v_acc, _ = sess.run([
-                    self.v_loss, 
-                    self.v_acc, 
-                    self.v_update],
-                    feed_dict=vfeed)
-                i += 1
-                ls += v_loss
-                acs += v_acc
-                if i == trans_num:
-                    imgs.append((ls / trans_num, acs / trans_num))
-                    i = 0
-                    ls = 0
-                    acs = 0
-                    log("Image %d: loss=%f acc=%1.4f" % (len(imgs), imgs[-1][0], imgs[-1][1]))
-        
-        except tf.errors.OutOfRangeError:
-            log("** End of validation dataset!")
-        # Get cumulative loss and accyract over VALID set
-        v_loss, v_acc, v_summ = sess.run([
-            self.v_loss_cum, 
-            self.v_acc_cum, 
-            self.v_summaries],
-            feed_dict=vfeed)
-        
-        self.v_tb_writer.add_summary(v_summ, batch_n)
-        log("Validation results after %d batches: loss=%f acc=%1.3f" % 
-                (batch_n, v_loss, v_acc))
-    
+
     def predict(self, paths, outdir=None):
         """
         Generate predictions for given `*.jpg` images.
@@ -413,3 +362,161 @@ class Trainer(object):
             except KeyboardInterrupt:
                 log("Stopped by keyboard interrupt!")
 
+
+    def validate_only(self, output=None):
+        """
+        Generate predictions for given `*.jpg` images.
+        Args:
+            paths: list of files/dirs paths
+            outdir: output directory (default: predictions-<timestamp>)
+        """
+        FLAGS = mkflags(self.config)
+        log = lambda x: self.log(x)
+        
+        imgs, labs, n_t = self._init()
+        v_init, v_next = setup_pipe("validation", self.config, 
+                imgs=imgs[n_t:], labs=labs[n_t:])
+
+        name = None
+        predictions = None
+        truth = None
+        counters = None
+
+        if not tf.train.checkpoint_exists(FLAGS.CKPT_PATH):
+            raise Exception("No valid checkpoint with prefix: %s" % FLAGS.CKPT_PATH)
+        
+        x_ph, _, ind_ph, extra = build_network(self.config)
+        y_pred = extra['PRED_ORIG']
+        wnd_ph = extra['ORIG_SZ']
+
+        saver = tf.train.Saver()
+        with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
+            try:
+                log("Loading checkpoint from:  %s" % FLAGS.CKPT_PATH)
+                saver.restore(sess, FLAGS.CKPT_PATH)
+                log("DONE!")
+            except:
+                raise Exception("Cannot restore checkpoint: %s" % FLAGS.CKPT_PATH)
+            
+            if output is not None:
+                if not os.path.exists(output):
+                    os.makedirs(output)
+
+            sess.run(v_init)
+            i = 0
+            j = 0
+            results = []
+            try:
+                while True:
+                    _img_crop, _lab_orig, _name, _shape, _wnd = sess.run(v_next)
+                    if name != _name:
+                        img_acc = calc_accuracy(predictions, truth, counters)
+                        if img_acc is not None:
+                            i += 1
+                            log("Prediction accuracy %d: %f" % (i, img_acc))
+                            results += [(name, img_acc)]
+                            if output is not None:
+                                if type(name) == bytes:
+                                    name = name.decode()
+                                pred_name = name.split(".")[0] + "_pred.png"
+                                save_predictions(output, name, truth, counters)
+                                save_predictions(output, pred_name, predictions, counters)
+                        j = 0
+                        name = _name[0]
+                        predictions = np.zeros(_shape)
+                        counters = np.zeros(_shape)
+                        truth = np.zeros(_shape)
+                        log("Generating prediction for %s [%d x %d]" % 
+                                (name, _shape[1], _shape[0]))
+                    x1 = _wnd[1]
+                    x2 = _wnd[1] + _lab_orig.shape[1]
+                    y1 = _wnd[0]
+                    y2 = _wnd[0] + _lab_orig.shape[0]
+                    w = x2 - x1 
+                    h = y2 - y1
+                    feed = {
+                        ind_ph: False,
+                        x_ph: _img_crop,
+                        wnd_ph: [h, w]
+                    }
+                    _pred_crop = sess.run(y_pred, feed_dict=feed)
+                    j += 1
+                    log("Image: {} (part: {}) wnd: [{} {} {} {}]".format(i, j, x1, y1, x2, y2)) 
+                    predictions[y1:y2, x1:x2] += _pred_crop[0]
+                    truth[y1:y2, x1:x2] += np.squeeze(_lab_orig)
+                    counters[y1:y2, x1:x2] += 1
+
+            except tf.errors.OutOfRangeError:
+                log("End of dataset!")
+                img_acc = calc_accuracy(predictions, truth, counters)
+                results += [(name, img_acc)]
+
+            except KeyboardInterrupt:
+                log("Interrupted by user...")
+        log("Final results: ")
+        acc_cum = 0
+        for name, acc in results:
+            log("%s - %f" % (name, acc))
+            acc_cum += acc
+        log("Total accuracy: %f" % (acc_cum / len(results)))
+
+
+    def validate(self, sess, v_init, v_next, x, y, batch_n, trans_num):
+        """
+        This method is called within train main loop inside keyboard interrupt
+        try-catch.
+        """
+        FLAGS = mkflags(self.config)
+        log = lambda x: self.log(x)
+
+        sess.run(v_init)
+        i = 0
+        j = 0
+        results = []
+        try:
+            while True:
+                _img_crop, _lab_orig, _name, _shape, _wnd = sess.run(v_next)
+                if name != _name:
+                    img_acc = calc_accuracy(predictions, truth, counters)
+                    if img_acc is not None:
+                        i += 1
+                        log("Prediction accuracy %d: %f" % (i, img_acc))
+                        results += [(name, img_acc)]
+                    j = 0
+                    name = _name[0]
+                    predictions = np.zeros(_shape)
+                    counters = np.zeros(_shape)
+                    truth = np.zeros(_shape)
+                    log("Generating prediction for %s [%d x %d]" % 
+                            (name, _shape[1], _shape[0]))
+                x1 = _wnd[1]
+                x2 = _wnd[1] + _lab_orig.shape[1]
+                y1 = _wnd[0]
+                y2 = _wnd[0] + _lab_orig.shape[0]
+                w = x2 - x1 
+                h = y2 - y1
+                feed = {
+                    ind_ph: False,
+                    x_ph: _img_crop,
+                    wnd_ph: [h, w]
+                }
+                _pred_crop = sess.run(y_pred, feed_dict=feed)
+                j += 1
+                log("Image: {} (part: {}) wnd: [{} {} {} {}]".format(i, j, x1, y1, x2, y2)) 
+                predictions[y1:y2, x1:x2] += _pred_crop[0]
+                truth[y1:y2, x1:x2] += np.squeeze(_lab_orig)
+                counters[y1:y2, x1:x2] += 1
+
+        except tf.errors.OutOfRangeError:
+            log("End of dataset!")
+            img_acc = calc_accuracy(predictions, truth, counters)
+            results += [(name, img_acc)]
+
+        except KeyboardInterrupt:
+            log("Interrupted by user...")
+        log("Final results: ")
+        acc_cum = 0
+        for name, acc in results:
+            log("%s - %f" % (name, acc))
+            acc_cum += acc
+        log("Total accuracy: %f" % (acc_cum / len(results)))

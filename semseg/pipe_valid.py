@@ -29,11 +29,6 @@ def _crop_and_resize_imgs(img, lab, name, shape, boxes, net_sz):
     inds = [0] * l
     sz = [net_sz] * 2
 
-    imgs = Dataset.from_tensors(tf.image.crop_and_resize(img, boxes, inds, sz))
-    imgs = imgs.apply(tf.contrib.data.unbatch())
-    labs = Dataset.from_tensors(tf.image.crop_and_resize(lab, boxes, inds, sz))
-    labs = labs.apply(tf.contrib.data.unbatch())
-    
     def _to_coord(x, h, w):
         x = tf.to_float(x)
         h = tf.to_float(h)
@@ -44,8 +39,30 @@ def _crop_and_resize_imgs(img, lab, name, shape, boxes, net_sz):
             x[2] * (h - 1), 
             x[3] * (w - 1)])
 
+    def _to_crops(x, h, w):
+        x = tf.to_float(x)
+        h = tf.to_float(h)
+        w = tf.to_float(w)
+        return tf.to_int32([
+            x[0] * (h - 1), 
+            x[1] * (w - 1), 
+            (x[2] - x[0]) * h, 
+            (x[3] - x[1]) * w])
+ 
+    def _crop(lab, x):
+        return tf.image.crop_to_bounding_box(lab, x[0], x[1], x[2], x[3])
+
+
+    imgs = Dataset.from_tensors(tf.image.crop_and_resize(img, boxes, inds, sz))
+    imgs = imgs.apply(tf.contrib.data.unbatch())
+
     boxes = Dataset.from_tensor_slices(boxes)
+    crops = boxes.map(map_func=lambda x: _to_crops(x, shape[0][0], shape[0][1]))
     boxes = boxes.map(map_func=lambda x: _to_coord(x, shape[0][0], shape[0][1]))
+
+    labs = crops.map(lambda x: _crop(lab, x))
+    labs = labs.apply(tf.contrib.data.unbatch())
+    
     names = Dataset.from_tensors(name).repeat(l)
     shapes = Dataset.from_tensors(shape[0]).repeat(l)
     return  Dataset.zip((imgs, labs, names, shapes, boxes))

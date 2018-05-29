@@ -32,3 +32,17 @@ def save_predictions(outdir, name, pred_arr, cnts_arr):
     image.save(path)
     return path
 
+
+def calc_accuracy(pred_arr, truth_arr, cnts_arr):
+    if pred_arr is None:
+        return None
+    preds = pred_arr / cnts_arr
+    preds = preds.astype(np.uint8)
+    truth = truth_arr / cnts_arr
+    truth = truth.astype(np.uint8)
+    ok = np.equal(preds, truth).astype(np.uint8)
+    ok = np.sum(ok)
+
+    sz = np.prod(pred_arr.shape)
+    return ok / sz
+
