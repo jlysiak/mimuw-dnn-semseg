@@ -4,7 +4,7 @@ import tensorflow as tf
 import os
 
 from tensorflow.python.data import Dataset
-from .utils import gen_crop_wnds
+from .utils import mkflags
 
 def _get_imgs_and_labs(img_path, label_path):
     """
@@ -24,26 +24,32 @@ def _get_imgs_and_labs(img_path, label_path):
         img_sz,
     )
 
-# Set batch size to 1, because images has different shapes
-# and we want to generate many images from this one image
-
 def _crop_and_resize_imgs(img, lab, name, shape, boxes, net_sz):
     l = len(boxes)
     inds = [0] * l
     sz = [net_sz] * 2
-    names = [name] * l
-    shapes = [shape] * l
 
-    imgs = Dataset.from_tensor(tf.image.crop_and_resize(img, boxes, inds, sz))
-    labs = Dataset.from_tensor(tf.image.crop_and_resize(lab, boxes, inds, sz))
+    imgs = Dataset.from_tensors(tf.image.crop_and_resize(img, boxes, inds, sz))
+    imgs = imgs.apply(tf.contrib.data.unbatch())
+    labs = Dataset.from_tensors(tf.image.crop_and_resize(lab, boxes, inds, sz))
+    labs = labs.apply(tf.contrib.data.unbatch())
     
     def _to_coord(x, h, w):
-        return [x[0] * (h - 1), x[1] * (w - 1), x[2] * (h - 1), x[3] * (w - 1)]
+        x = tf.to_float(x)
+        h = tf.to_float(h)
+        w = tf.to_float(w)
+        return tf.to_int32([
+            x[0] * (h - 1), 
+            x[1] * (w - 1), 
+            x[2] * (h - 1), 
+            x[3] * (w - 1)])
+
     boxes = Dataset.from_tensor_slices(boxes)
-    boxes = ds_boxes.map(map_func=lambda x: _to_coord(x, shape[0], shape[1]))
-    names = Dataset.from_tensor_slices(names)
-    shapes = Dataset.from_tensor_slices(shapes)
+    boxes = boxes.map(map_func=lambda x: _to_coord(x, shape[0][0], shape[0][1]))
+    names = Dataset.from_tensors(name).repeat(l)
+    shapes = Dataset.from_tensors(shape[0]).repeat(l)
     return  Dataset.zip((imgs, labs, names, shapes, boxes))
+
 
 def setup_valid_pipe(config, imgs, labs):
     """
@@ -85,13 +91,14 @@ def setup_valid_pipe(config, imgs, labs):
     
     # Open images/labels and decode
     # NOTE: WATCH OUT when using zips along with maps or interleaves...
-    ds_ex = ds_ex.map(
+    ds_ex = ds_files.map(
             map_func=_get_imgs_and_labs,
             num_parallel_calls=cores_count) 
 
-    _crop_rescale = lambda img, lab, name, sh: _crop_and_resize_imgs(img, lab, name, boxes, FLAGS.INPUT_SZ)
+    _crop_rescale = lambda img, lab, name, sh: _crop_and_resize_imgs(img, lab, name, sh, boxes, FLAGS.INPUT_SZ)
     ds_ex = ds_ex.batch(1)
-    ds_ex = ds_ex.flat_map(_crop_rescale).apply(tf.contrib.data.unbatch())
+    ds_ex = ds_ex.flat_map(_crop_rescale)
+
 
     it =  ds_ex.make_initializable_iterator()
     return it.initializer, it.get_next()

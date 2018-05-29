@@ -44,6 +44,9 @@ def add_args_actions(args):
     args.add_argument("--pred_pipe_test", metavar="OUT", nargs="?", 
             const="pred_pipe_test", help="Test input pipe and generate \
                     imgs into `OUT` dir.")
+    args.add_argument("--test_valid_pipe", metavar="OUT", nargs="?", 
+            const="test_valid_pipe", help="Test validation input pipe and \
+                    generate imgs into `OUT` dir.")
     
     args.add_argument("--predict", help="Generate predictions for given data", 
             metavar="PATH", nargs="*")
@@ -103,6 +106,9 @@ if __name__ == '__main__':
     elif FLAGS.train_pipe_test is not None:
         with Trainer(config) as T:
             pass 
+    elif FLAGS.test_valid_pipe is not None:
+        with Trainer(config) as T:
+            T.test_valid_pipe(FLAGS.test_valid_pipe) 
     elif FLAGS.pred_pipe_test is not None:
         with Trainer(config) as T:
             pass

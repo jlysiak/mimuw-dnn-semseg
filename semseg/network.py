@@ -13,6 +13,7 @@ def build_network(config):
     # solution to shared variables model...
     x_ph = tf.placeholder(dtype=tf.float32, name="INPUT")
     y_ph = tf.placeholder(dtype=tf.int32, name="LABELS")
+    wnd_ph = tf.placeholder(dtype=tf.int32, name="ORIG_SIZE")
     ind_ph = tf.placeholder(dtype=tf.bool, name="TRAIN_INDICATOR")
     x = x_ph
     y = y_ph
@@ -27,12 +28,12 @@ def build_network(config):
                         dfmt=FLAGS.DATA_FORMAT)
 
     pred = tf.argmax(logits, axis=3, output_type=tf.int32)
-    _orig_sz = [FLAGS.PREDICTION_SZ] * 2
     pred_orig = tf.reshape(pred, shape=[-1] + pred.shape.as_list()[1:3] + [1])
     pred_orig = tf.image.resize_images(images=pred_orig, 
-            size=_orig_sz, 
+            size=wnd_ph, 
             method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-    pred_orig = tf.reshape(pred_orig, shape=[-1] + _orig_sz)
+#    pred_orig = tf.squeeze(pred_orig)
+    pred_orig = tf.reshape(pred_orig, shape=tf.concat([[-1], wnd_ph], axis=0))
     
     # Save one image, label and prediction from each batch
     t_summaries = []
@@ -95,6 +96,7 @@ def build_network(config):
         'METRICS_UPDATE': update,
         'T_SUMMARY': t_summaries,
         'V_SUMMARY': v_summaries,
-        'LAYERS': layers
+        'LAYERS': layers,
+        'ORIG_SZ': wnd_ph
     }
     return x_ph, y_ph, ind_ph, extra 

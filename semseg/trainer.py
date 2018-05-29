@@ -33,12 +33,13 @@ class Trainer(object):
         self.config = config
 
 
-    def _train_init(self):
+    def _init(self):
         """
-        Some initialzation done before training phase
+        Some init stuff before training and validation.
         """
         FLAGS = mkflags(self.config)
         config = self.config
+        log = lambda x: self.log(x)
 
         if not os.path.exists(FLAGS.DATASET_DIR):
             raise Exception("Dataset directory does not exist!")
@@ -56,7 +57,32 @@ class Trainer(object):
         config['TIMESTAMP_END'] =  time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time_end))
         if "LOCK" not in config:
             config["LOCK"] = False
+
         self.config = config
+        FLAGS = mkflags(self.config)
+
+        # Get training data
+        imgs = os.listdir(FLAGS.DATASET_IMAGES)
+        labs = os.listdir(FLAGS.DATASET_LABELS)
+
+        n = int(len(imgs) * FLAGS.DS_FRAC)
+        if n < 10:
+            raise Exception("Not enough files in dataset...")
+        n_v = max(int(n * FLAGS.VALID_DS_FRAC), 2)
+        n_v = min(n - 1, n_v)
+        n_v = min(n_v, FLAGS.VALID_DS_FILE_LIMIT)
+        n_t = n - n_v
+        log("Examples in total: %d, train: %d, valid: %d" % (n, n_t, n_v))
+        
+        # Prevent non-deterministic file listing
+        imgs.sort()
+        labs.sort()
+        _ex = [i for i in zip(imgs, labs)]
+        shuffle(_ex)
+
+        imgs = [os.path.join(FLAGS.DATASET_IMAGES, el) for el, _ in _ex[:n]]
+        labs = [os.path.join(FLAGS.DATASET_LABELS, el) for _, el in _ex[:n]]
+        return imgs, labs, n_t
 
 
     def __enter__(self):
@@ -83,58 +109,6 @@ class Trainer(object):
         for idx, layer in enumerate(layers):
             self.log("%d: %s, %s" % (idx, layer.name, str(layer.shape)))
 
-
-    def validate(self, sess, it_v_init, it_v_next, x, y, batch_n, trans_num):
-        """
-        This method is called within train main loop inside keyboard interrupt
-        try-catch.
-        """
-        # Initialize validation pipeline
-        log = lambda x: self.log(x)
-        it_v_init.run()
-        self.v_init.run()
-        log("** Begin validation @ %d" % batch_n)
-        log("AVG over %d augumentations" % trans_num)
-        imgs = []
-        i = 0
-        ls = 0
-        acs = 0
-        try:
-            while True:
-                x_val, y_val = sess.run(it_v_next)
-                vfeed = {
-                    x: x_val,
-                    y: y_val,
-                    self.indicator: False
-                }
-                # Calculate image average
-                v_loss, v_acc, _ = sess.run([
-                    self.v_loss, 
-                    self.v_acc, 
-                    self.v_update],
-                    feed_dict=vfeed)
-                i += 1
-                ls += v_loss
-                acs += v_acc
-                if i == trans_num:
-                    imgs.append((ls / trans_num, acs / trans_num))
-                    i = 0
-                    ls = 0
-                    acs = 0
-                    log("Image %d: loss=%f acc=%1.4f" % (len(imgs), imgs[-1][0], imgs[-1][1]))
-        
-        except tf.errors.OutOfRangeError:
-            log("** End of validation dataset!")
-        # Get cumulative loss and accyract over VALID set
-        v_loss, v_acc, v_summ = sess.run([
-            self.v_loss_cum, 
-            self.v_acc_cum, 
-            self.v_summaries],
-            feed_dict=vfeed)
-        
-        self.v_tb_writer.add_summary(v_summ, batch_n)
-        log("Validation results after %d batches: loss=%f acc=%1.3f" % 
-                (batch_n, v_loss, v_acc))
 
 
     def train(self):
@@ -266,6 +240,57 @@ class Trainer(object):
                     save_path = saver.save(sess, FLAGS.CKPT_PATH)
                     log("Model saved as: %s" % save_path)
     
+    def validate(self, sess, it_v_init, it_v_next, x, y, batch_n, trans_num):
+        """
+        This method is called within train main loop inside keyboard interrupt
+        try-catch.
+        """
+        # Initialize validation pipeline
+        log = lambda x: self.log(x)
+        it_v_init.run()
+        self.v_init.run()
+        log("** Begin validation @ %d" % batch_n)
+        log("AVG over %d augumentations" % trans_num)
+        imgs = []
+        i = 0
+        ls = 0
+        acs = 0
+        try:
+            while True:
+                x_val, y_val = sess.run(it_v_next)
+                vfeed = {
+                    x: x_val,
+                    y: y_val,
+                    self.indicator: False
+                }
+                # Calculate image average
+                v_loss, v_acc, _ = sess.run([
+                    self.v_loss, 
+                    self.v_acc, 
+                    self.v_update],
+                    feed_dict=vfeed)
+                i += 1
+                ls += v_loss
+                acs += v_acc
+                if i == trans_num:
+                    imgs.append((ls / trans_num, acs / trans_num))
+                    i = 0
+                    ls = 0
+                    acs = 0
+                    log("Image %d: loss=%f acc=%1.4f" % (len(imgs), imgs[-1][0], imgs[-1][1]))
+        
+        except tf.errors.OutOfRangeError:
+            log("** End of validation dataset!")
+        # Get cumulative loss and accyract over VALID set
+        v_loss, v_acc, v_summ = sess.run([
+            self.v_loss_cum, 
+            self.v_acc_cum, 
+            self.v_summaries],
+            feed_dict=vfeed)
+        
+        self.v_tb_writer.add_summary(v_summ, batch_n)
+        log("Validation results after %d batches: loss=%f acc=%1.3f" % 
+                (batch_n, v_loss, v_acc))
     
     def predict(self, paths, outdir=None):
         """
@@ -303,6 +328,7 @@ class Trainer(object):
         log("Building network...")
         x_ph, _, ind_ph, extra = build_network(self.config)
         y_pred = extra['PRED_ORIG']
+        wnd_ph = extra['ORIG_SZ']
         self.show_layers(extra['LAYERS'])
 
         saver = tf.train.Saver()
@@ -331,20 +357,23 @@ class Trainer(object):
                             i += 1
                             log("Prediction %d saved at %s" % (i, saved_name))
                         j = 0
-                        name = _name
+                        name = _name[0]
                         predictions = np.zeros(_shape)
                         counters = np.zeros(_shape)
                         log("Generating prediction for %s [%d x %d]" % 
                                 (name, _shape[1], _shape[0]))
+                    x1 = _wnd[1]
+                    x2 = _wnd[3] + 1
+                    y1 = _wnd[0]
+                    y2 = _wnd[2] + 1
+                    w = x2 - x1 
+                    h = y2 - y1
                     feed = {
                         ind_ph: False,
-                        x_ph: _img_crop
+                        x_ph: _img_crop,
+                        wnd_ph: [h, w]
                     }
                     _pred_crop = sess.run(y_pred, feed_dict=feed)
-                    x1 = _wnd[1]
-                    x2 = _wnd[1] + _wnd[3]
-                    y1 = _wnd[0]
-                    y2 = _wnd[0] + _wnd[2]
                     j += 1
                     log("Image: {} (part: {}) wnd: [{} {} {} {}]".format(i, j, x1, y1, x2, y2)) 
                     predictions[y1:y2, x1:x2] += _pred_crop[0]
@@ -356,4 +385,31 @@ class Trainer(object):
 
             except KeyboardInterrupt:
                 log("Interrupted by user...")
+
+
+    def test_valid_pipe(self, v_outs="test_pipe_valid"):
+        FLAGS = mkflags(self.config)
+        log = lambda x: self.log(x)
+
+        imgs, labs, n_t = self._init()
+        v_init, v_next = setup_pipe("validation", self.config, 
+                imgs=imgs[n_t:], labs=labs[n_t:])
+
+        if not os.path.exists(v_outs):
+            os.makedirs(v_outs)
+
+        with tf.Session() as sess:
+            sess.run(v_init)
+            try:
+                i = 0
+                while True:
+                    img, lab, name, sh, wnd = sess.run(v_next)
+                    print(img.shape, lab.shape, name, sh, wnd)
+                    save_image(v_outs, "%d-a.jpg" % i, img)
+                    save_image(v_outs, "%d-a.png" % i, np.squeeze(lab))
+                    i += 1
+            except tf.errors.OutOfRangeError:
+                print("End...")
+            except KeyboardInterrupt:
+                log("Stopped by keyboard interrupt!")
 
