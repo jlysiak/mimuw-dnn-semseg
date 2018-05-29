@@ -9,7 +9,7 @@ import sys
 from random import shuffle
 
 from .utils import mkflags, to_sec, get_image_paths
-from .images import save_predictions
+from .images import save_predictions, save_image
 from .pipe import setup_pipe
 from .network import build_network
 
@@ -299,7 +299,7 @@ class Trainer(object):
 
         log("Building network...")
         x_ph, _, ind_ph, extra = build_network(self.config)
-        y_pred = extra['PRED']
+        y_pred = extra['PRED_ORIG']
         self.show_layers(extra['LAYERS'])
 
         saver = tf.train.Saver()
@@ -342,10 +342,10 @@ class Trainer(object):
                     x2 = _wnd[1] + _wnd[3]
                     y1 = _wnd[0]
                     y2 = _wnd[0] + _wnd[2]
+                    j += 1
+                    log("Image: {} (part: {}) wnd: [{} {} {} {}]".format(i, j, x1, y1, x2, y2)) 
                     predictions[y1:y2, x1:x2] += _pred_crop[0]
                     counters[y1:y2, x1:x2] += 1
-                    j += 1
-                    log("wnd_n={:5d} wnd=[{} {} {} {}]".format(j, x1, y1, x2, y2)) 
 
             except tf.errors.OutOfRangeError:
                 log("End of dataset!")

@@ -91,7 +91,7 @@ def setup_train_pipe(config, imgs, labs):
 
     # Set network input size
     in_size = tf.constant([config.INPUT_SZ] * 2)
-    out_size = tf.constant([config.OUTPUT_SZ] * 2)
+    out_size = in_size
 
     # Set batch size to 1, because images has different shapes
     # and we want to generate many images from this one image

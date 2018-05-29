@@ -20,7 +20,7 @@ _DEFAULT_CONF = {
     "DATA_FORMAT": "NHWC",
     "BATCH_SZ" : 16,
     "INPUT_SZ" : 256,
-    "OUTPUT_SZ" : 256,
+    "PREDICTION_SZ" : 600,
     "TIME_LIMIT": "11:50:00", 
     "EPOCHS" : 1,
     "VALIDATION_IVAL" : 500,

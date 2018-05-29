@@ -31,8 +31,8 @@ def gen_crop_wnds(img_sz, wnd_sz):
     """
     Generate half-overlap crop windows.
     """
-    w_offs = np.linspace(0, img_sz[1] - wnd_sz, 2 * img_sz[1] // wnd_sz, dtype=np.int32)
-    h_offs = np.linspace(0, img_sz[0] - wnd_sz, 2 * img_sz[0] // wnd_sz, dtype=np.int32)
+    w_offs = np.linspace(0, img_sz[1] - wnd_sz, (2 * img_sz[1] - 1) // wnd_sz, dtype=np.int32)
+    h_offs = np.linspace(0, img_sz[0] - wnd_sz, (2 * img_sz[0] - 1) // wnd_sz, dtype=np.int32)
     crops = []
     for offh in h_offs:
         for offw in w_offs:

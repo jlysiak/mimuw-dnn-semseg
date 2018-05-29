@@ -47,6 +47,7 @@ def add_args_actions(args):
     
     args.add_argument("--predict", help="Generate predictions for given data", 
             metavar="PATH", nargs="*")
+    args.add_argument("--validate", help="Validate model on given data", action="store_true")
     args.add_argument("--train", help="TRAINING TIME!", action="store_true")
 
 

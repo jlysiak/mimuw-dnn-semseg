@@ -25,7 +25,7 @@ def _read_imgs_gen_crops(img_path, in_sz):
     )
 
 
-def _crop_imgs(img, name, shape, crops):
+def _crop_and_resize_imgs(img, name, shape, crops, net_input_sz):
     """
     Crop given image using crops boxes
     Returns:
@@ -39,6 +39,11 @@ def _crop_imgs(img, name, shape, crops):
             name,
             shape,
             x))
+    ds_crops = ds_crops.map(lambda img, _name, _sh, _wnd: 
+            (tf.image.resize_images(images=img, size=[net_input_sz] * 2, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR),
+            _name,
+            _sh,
+            _wnd))
     return ds_crops
 
 
@@ -55,7 +60,7 @@ def setup_pred_pipe(config, imgs):
 
     ds_imgs = Dataset.from_tensor_slices(imgs)
      
-    _get_imgs_and_crops = lambda x: _read_imgs_gen_crops(x, FLAGS.INPUT_SZ)
+    _get_imgs_and_crops = lambda x: _read_imgs_gen_crops(x, FLAGS.PREDICTION_SZ)
 
     # Open images and decode
     # NOTE: WATCH OUT when using zips along with maps or interleaves...
@@ -63,7 +68,8 @@ def setup_pred_pipe(config, imgs):
             map_func=_get_imgs_and_crops,
             num_parallel_calls=cores_count) 
 
-    ds_imgs = ds_imgs.flat_map(_crop_imgs)
+    _crop_rescale = lambda img, name, sh, crops: _crop_and_resize_imgs(img, name, sh, crops, FLAGS.INPUT_SZ)
+    ds_imgs = ds_imgs.flat_map(_crop_rescale)
 
     it =  ds_imgs.make_initializable_iterator()
     return it.initializer, it.get_next()

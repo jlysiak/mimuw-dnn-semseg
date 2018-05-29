@@ -27,6 +27,12 @@ def build_network(config):
                         dfmt=FLAGS.DATA_FORMAT)
 
     pred = tf.argmax(logits, axis=3, output_type=tf.int32)
+    _orig_sz = [FLAGS.PREDICTION_SZ] * 2
+    pred_orig = tf.reshape(pred, shape=[-1] + pred.shape.as_list()[1:3] + [1])
+    pred_orig = tf.image.resize_images(images=pred_orig, 
+            size=_orig_sz, 
+            method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+    pred_orig = tf.reshape(pred_orig, shape=[-1] + _orig_sz)
     
     # Save one image, label and prediction from each batch
     t_summaries = []
@@ -79,6 +85,7 @@ def build_network(config):
     
     extra = {
         'PRED': pred,
+        'PRED_ORIG': pred_orig,
         'TRAIN': train_step,
         'LOSS': loss,
         'ACC': acc,
