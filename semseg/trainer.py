@@ -326,33 +326,6 @@ class Trainer(object):
                 log("Interrupted by user...")
 
 
-    def test_valid_pipe(self, v_outs="test_pipe_valid"):
-        FLAGS = mkflags(self.config)
-        log = lambda x: self.log(x)
-
-        imgs, labs, n_t = self._init()
-        v_init, v_next = setup_pipe("validation", self.config, 
-                imgs=imgs[n_t:], labs=labs[n_t:])
-
-        if not os.path.exists(v_outs):
-            os.makedirs(v_outs)
-
-        with tf.Session() as sess:
-            sess.run(v_init)
-            try:
-                i = 0
-                while True:
-                    img, lab, name, sh, wnd = sess.run(v_next)
-                    print(img.shape, lab.shape, name, sh, wnd)
-                    save_image(v_outs, "%d-a.jpg" % i, img)
-                    save_image(v_outs, "%d-a.png" % i, np.squeeze(lab))
-                    i += 1
-            except tf.errors.OutOfRangeError:
-                print("End...")
-            except KeyboardInterrupt:
-                log("Stopped by keyboard interrupt!")
-
-
     def validate_only(self, output=None):
         """
         Generate predictions for given `*.jpg` images.
@@ -525,3 +498,63 @@ class Trainer(object):
             log("Total accuracy: %f" % overall)
 
         return is_over, overall
+    
+
+    def test_train_pipe(self, t_outs="test_pipe_train"):
+        """
+        Handy method to check date for training from input pipe.
+        """
+        conf = mkflags(self.config)
+        log = lambda x: self.log(x)
+        log('******* Input pipe test for training')
+        
+        imgs, labs, n_t = self._init()
+        t_init, t_next = setup_pipe("training", self.config, 
+                imgs=imgs[:n_t], labs=labs[:n_t])
+
+        if not os.path.exists(t_outs):
+            os.makedirs(t_outs)
+        
+        with tf.Session() as sess:
+            sess.run(t_init)
+            try:
+                i = 0
+                while True:
+                    img, lab = sess.run(t_next)
+                    print(img.shape, lab.shape)
+                    for k in range(len(img)):
+                        save_image(t_outs, "%d.jpg" % i, img[k])
+                        save_image(t_outs, "%d.png" % i, np.squeeze(lab[k]))
+                        i += 1
+            except tf.errors.OutOfRangeError:
+                log("End...")
+            except KeyboardInterrupt:
+                log("Stopped by keyboard interrupt!")
+
+
+    def test_valid_pipe(self, v_outs="test_pipe_valid"):
+        FLAGS = mkflags(self.config)
+        log = lambda x: self.log(x)
+
+        imgs, labs, n_t = self._init()
+        v_init, v_next = setup_pipe("validation", self.config, 
+                imgs=imgs[n_t:], labs=labs[n_t:])
+
+        if not os.path.exists(v_outs):
+            os.makedirs(v_outs)
+
+        with tf.Session() as sess:
+            sess.run(v_init)
+            try:
+                i = 0
+                while True:
+                    img, lab, name, sh, wnd = sess.run(v_next)
+                    print(img.shape, lab.shape, name, sh, wnd)
+                    save_image(v_outs, "%d.jpg" % i, img)
+                    save_image(v_outs, "%d.png" % i, np.squeeze(lab))
+                    i += 1
+            except tf.errors.OutOfRangeError:
+                print("End...")
+            except KeyboardInterrupt:
+                log("Stopped by keyboard interrupt!")
+    

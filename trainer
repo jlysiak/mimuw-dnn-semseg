@@ -42,14 +42,11 @@ def add_args_create_load_conf(args):
 
 def add_args_actions(args):
     # ==== ACTIONS 
-    args.add_argument("--train_pipe_test", metavar="OUT", nargs="?", 
-            const="train_pipe_test", help="Test input pipe and generate \
-                    imgs into `OUT` dir.")
-    args.add_argument("--pred_pipe_test", metavar="OUT", nargs="?", 
-            const="pred_pipe_test", help="Test input pipe and generate \
+    args.add_argument("--test_train_pipe", metavar="OUT", nargs="?", 
+            const="test_pipe_train", help="Test input pipe and generate \
                     imgs into `OUT` dir.")
     args.add_argument("--test_valid_pipe", metavar="OUT", nargs="?", 
-            const="test_valid_pipe", help="Test validation input pipe and \
+            const="test_pipe_valid", help="Test validation input pipe and \
                     generate imgs into `OUT` dir.")
     
     args.add_argument("--predict", help="Generate predictions for given data", 
@@ -118,17 +115,13 @@ if __name__ == '__main__':
         with Trainer(config) as T:
             T.validate_only(FLAGS.output)
 
-    elif FLAGS.train_pipe_test is not None:
+    elif FLAGS.test_train_pipe is not None:
         with Trainer(config) as T:
-            pass # TODO
+            T.test_train_pipe(FLAGS.test_train_pipe)
 
     elif FLAGS.test_valid_pipe is not None:
         with Trainer(config) as T:
             T.test_valid_pipe(FLAGS.test_valid_pipe) 
-
-    elif FLAGS.pred_pipe_test is not None:
-        with Trainer(config) as T:
-            pass # TODO
     else:
         args.print_help()
 
