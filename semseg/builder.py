@@ -1,10 +1,10 @@
 """
-Network builder
+Network builder.
 """
 
 import tensorflow as tf
 
-import net_utils
+from .utils_builder import bnorm, conv2d, upconv2d, max_pool, get_features_num
 
 
 def _apply_relu(x):
@@ -18,7 +18,7 @@ def _apply_bnorm(x, t_ind, dfmt):
         t_ind: train indicator
         dfmt: data format
     """
-    return net_utils.bnorm(x, is_training=t_ind, dfmt=dfmt)
+    return bnorm(x, is_training=t_ind, dfmt=dfmt)
 
 
 def _apply_conv(x, conf, dfmt):
@@ -30,13 +30,13 @@ def _apply_conv(x, conf, dfmt):
             1 - kernel space dimensions
     """
     l = len(conf)
-    f_out = net_utils.get_features_num(x, dfmt)
+    f_out = get_features_num(x, dfmt)
     spc_dim = 3
     if l > 0:
         f_out = conf[0]
     if l > 1:
         spc_dim = conf[1]
-    return net_utils.conv2d(x, features_out=f_out, 
+    return conv2d(x, features_out=f_out, 
             space_dim=spc_dim, dfmt='NHWC')
 
 
@@ -47,14 +47,14 @@ def _apply_upconv(x, conf, dfmt, batch_size):
         conf: config
     """
     l = len(conf)
-    f_out = net_utils.get_features_num(x, dfmt)
+    f_out = get_features_num(x, dfmt)
     spc_dim = 3
     if l > 0:
         f_out = conf[0]
     if l > 1:
         spc_dim = conf[1]
 
-    return net_utils.upconv2d(x, 
+    return upconv2d(x, 
             features_out=f_out, 
             dfmt=dfmt, 
             space_dim=spc_dim, 
@@ -95,10 +95,10 @@ def _apply_pool(x, conf, dfmt):
     ksize = 2
     if len(conf) > 0:
         ksize = conf[0]
-    return net_utils.max_pool(x, ksize=ksize, dfmt=dfmt)
+    return max_pool(x, ksize=ksize, dfmt=dfmt)
 
 
-def build_network(x, batch_size, arch_list, log,train_indicator=True, dfmt='NHWC'):
+def network_builder(x, batch_size, arch_list, train_indicator=True, dfmt='NHWC'):
     """ 
     NETWORK BUILDER 
     Args:
@@ -161,9 +161,8 @@ def build_network(x, batch_size, arch_list, log,train_indicator=True, dfmt='NHWC
 
         i += 1
         layers += [signal]
-        log("Created: " + str(signal))    
     
     if ch_first: 
         signal = tf.transpose(signal, perm=[0, 2, 3, 1])
     
-    return signal
+    return signal, layers

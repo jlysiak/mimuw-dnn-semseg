@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow.python.data import Dataset
 import os
 
-import utils
+from .utils import mkflags, gen_crop_wnds
 
 def _read_imgs_gen_crops(img_path, in_sz):
     """
@@ -15,8 +15,8 @@ def _read_imgs_gen_crops(img_path, in_sz):
     """
     img = tf.image.decode_jpeg(tf.read_file(img_path)) 
     img_sz = tf.shape(img)[:2]
-    crops = tf.py_func(_conv, [img_sz, in_sz], tf.int32)
-    name = tf.string_split([label_path], delimiter="/").values[-1]
+    crops = tf.py_func(gen_crop_wnds, [img_sz, in_sz], tf.int32)
+    name = tf.string_split([img_path], delimiter="/").values[-1]
     return (
         img,
         name,
@@ -43,16 +43,19 @@ def _crop_imgs(img, name, shape, crops):
 
 
 
-def setup_pred_pipe(imgs_paths, config, log):
+def setup_pred_pipe(config, imgs):
     """
     Build input pipe for generating predictions.
+    Args:
+        config: configuration dict
+        imgs: images to predict
     """
+    FLAGS = mkflags(config)
     cores_count = min(4, max(multiprocessing.cpu_count() // 2, 1))
-    log("Using %d cores in parallel ops..." % cores_count)
 
-    ds_imgs = Dataset.from_tensor_slices(imgs_paths)
+    ds_imgs = Dataset.from_tensor_slices(imgs)
      
-    _get_imgs_and_crops = lambda x, y: _read_imgs_gen_crops(x, y, config.INPUT_SZ)
+    _get_imgs_and_crops = lambda x: _read_imgs_gen_crops(x, FLAGS.INPUT_SZ)
 
     # Open images and decode
     # NOTE: WATCH OUT when using zips along with maps or interleaves...
@@ -60,10 +63,10 @@ def setup_pred_pipe(imgs_paths, config, log):
             map_func=_get_imgs_and_crops,
             num_parallel_calls=cores_count) 
 
-    ds_v = ds_v.flat_map(_crop_imgs)
+    ds_imgs = ds_imgs.flat_map(_crop_imgs)
 
-    it_v =  ds_v.make_initializable_iterator()
-    return it_v
+    it =  ds_imgs.make_initializable_iterator()
+    return it.initializer, it.get_next()
 
 
 

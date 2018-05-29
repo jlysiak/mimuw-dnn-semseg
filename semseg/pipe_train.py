@@ -1,13 +1,11 @@
 import multiprocessing
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.data import Dataset
 import os
 
+from tensorflow.python.data import Dataset
+from .utils import mkflags
 
-class CONF:
-    def __init__(self, kw):
-        self.__dict__ = kw
 
 def _to_raw_imgs(img_path, label_path):
     """
@@ -17,40 +15,21 @@ def _to_raw_imgs(img_path, label_path):
             tf.image.decode_png(tf.read_file(label_path)))
 
 
-def setup_train_valid_pipes(config, log):
+def setup_train_pipe(config, imgs, labs):
     """
-    Creates input pipe.
+    Build training input data pipe.
     Args:
-        config: trainer configuration
-        frac: fraction of all images to take
-    Returns:
-        Two iterators for train and validation dataset
+        config: config dict
+        imgs: images/examples
+        labs: labels
     """
-    imgs = os.listdir(config.DATASET_IMAGES)
-    labs = os.listdir(config.DATASET_LABELS)
-
-    n = int(len(imgs) * config.DS_FRAC)
-    if n < 2:
-        raise Exception("Not enough files in dataset...")
-    n_v = int(n * config.VALID_DS_FRAC)
-    if n == n_v:
-        n_v -= 1
-    n_t = n - n_v
-    log("Examples in total: %d, train: %d, valid: %d" % (n, n_t, n_v))
-    
-    # Prevent non-deterministic file listing
-    imgs.sort()
-    labs.sort()
-    imgs = [os.path.join(config.DATASET_IMAGES, el) for el in imgs[:n]]
-    labs = [os.path.join(config.DATASET_LABELS, el) for el in labs[:n]]
-   
+    FLAGS = mkflags(config)
     cores_count = min(4, max(multiprocessing.cpu_count() // 2, 1))
-    log("Using %d cores in parallel ops..." % cores_count)
 
     ds_imgs = Dataset.from_tensor_slices(imgs)
     ds_labs = Dataset.from_tensor_slices(labs)
     ds_files = Dataset.zip((ds_imgs, ds_labs))
-    # Shuffle all files
+    # Shuffle all files on each initialization
     ds_files = ds_files.shuffle(n)
     
     # Open images/labels and decode
@@ -69,8 +48,8 @@ def setup_train_valid_pipes(config, log):
     # This could be done at each epoch but I don't have much more time...
     
     # === TRAINING PIPE RANDOM CROPS & SCALING
-    CENTRAL_CROPS = config.CENTRAL_CROPS 
-    RANDOM_CROPS = config.RANDOM_CROPS 
+    CENTRAL_CROPS = FLAGS.CENTRAL_CROPS 
+    RANDOM_CROPS = FLAGS.RANDOM_CROPS 
     T_CROPS_N = RANDOM_CROPS + CENTRAL_CROPS
 
     CENTRAL_CROPS_LIST = np.linspace(0.5, 1, CENTRAL_CROPS)

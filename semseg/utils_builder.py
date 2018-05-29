@@ -1,12 +1,9 @@
 """
 Network builder simple utils.
-
-Jacek Łysiak
 """
 import tensorflow as tf
 import numpy as np
 
-# == BUILDER HELPERS
 
 def weight_variable(shape):
     try:

@@ -1,5 +1,6 @@
+import tensorflow as tf
 from .utils import mkflags
-from .builder import build_network 
+from .builder import network_builder
 
 def build_network(config):
     """
@@ -21,7 +22,7 @@ def build_network(config):
         with tf.name_scope("network"):
             # Network builder chnges data format if needed
             # but returns NHWC
-            logits = build_network(x=x, batch_size=FLAGS.BATCH_SZ,
+            logits, layers = network_builder(x=x, batch_size=FLAGS.BATCH_SZ,
                         arch_list=FLAGS.ARCHITECTURE, train_indicator=ind_ph,
                         dfmt=FLAGS.DATA_FORMAT)
 
@@ -62,8 +63,8 @@ def build_network(config):
             values=loss,
             name="valid/metrics/loss")
     v_summaries = [] 
-    v_summaries += [tf.summary.scalar("valid/loss", v_loss)]
-    v_summaries += [tf.summary.scalar("valid/acc", v_acc)]
+    v_summaries += [tf.summary.scalar("valid/loss", loss_cum)]
+    v_summaries += [tf.summary.scalar("valid/acc", acc_cum)]
     
     metrics_vars = []
     for el in tf.get_collection(
@@ -86,6 +87,7 @@ def build_network(config):
         'METRICS_INIT': metrics_init,
         'METRICS_UPDATE': update,
         'T_SUMMARY': t_summaries,
-        'V_SUMMARY': v_summeries
+        'V_SUMMARY': v_summaries,
+        'LAYERS': layers
     }
     return x_ph, y_ph, ind_ph, extra 

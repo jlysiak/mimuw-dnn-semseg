@@ -6,13 +6,12 @@ import shutil
 import datetime
 import time
 import sys
-
-
-
+from random import shuffle
 
 from .utils import mkflags, to_sec, get_image_paths
 from .images import save_predictions
 from .pipe import setup_pipe
+from .network import build_network
 
 class Trainer(object):
     """
@@ -28,6 +27,7 @@ class Trainer(object):
 
         stamp = '{:%Y-%m-%d-%H-%M-%S}'.format(datetime.datetime.now())
         config['START_TIMESTAMP'] = stamp
+        config['TIME_START'] = time.time() 
 
         self.log_file = open(FLAGS.LOG_PATH, "a")
         self.config = config
@@ -54,7 +54,6 @@ class Trainer(object):
         time_end = time.time() + to_sec(FLAGS.TIME_LIMIT)
         config['TIME_END'] = time_end
         config['TIMESTAMP_END'] =  time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time_end))
-        config['TIME_START'] = time.time() 
         if "LOCK" not in config:
             config["LOCK"] = False
         self.config = config
@@ -77,6 +76,12 @@ class Trainer(object):
         s = "[{:>19s} | {:02d}:{:02d}:{:02d}] {}\n".format(timestamp, h, m, sec,s)
         sys.stderr.write(s)        
         self.log_file.write(s)
+
+
+    def show_layers(self, layers):
+        self.log("Created layers: ")
+        for idx, layer in enumerate(layers):
+            self.log("%d: %s, %s" % (idx, layer.name, str(layer.shape)))
 
 
     def validate(self, sess, it_v_init, it_v_next, x, y, batch_n, trans_num):
@@ -157,12 +162,16 @@ class Trainer(object):
         # Prevent non-deterministic file listing
         imgs.sort()
         labs.sort()
-        imgs = [os.path.join(FLAGS.DATASET_IMAGES, el) for el in imgs[:n]]
-        labs = [os.path.join(FLAGS.DATASET_LABELS, el) for el in labs[:n]]
+        _ex = shuffle(zip(imgs, labs))
+
+        imgs = [os.path.join(FLAGS.DATASET_IMAGES, el) for el, _ in _ex[:n]]
+        labs = [os.path.join(FLAGS.DATASET_LABELS, el) for _, el in _ex[:n]] 
         
         log("** Starting training procedure...")
-        t_init, t_next = setup_pipe("training", self.config, imgs=paths, labs=labs)
-        v_init, v_next = setup_pipe("validation", self.config, imgs=paths, labs=labs)
+        t_init, t_next = setup_pipe("training", self.config, 
+                imgs=paths[:n_t], labs=labs[:n_t])
+        v_init, v_next = setup_pipe("validation", self.config, 
+                imgs=paths[n_t:], labs=labs[n_t:])
         
         log("** Building network...")
         x_ph, y_ph, ind_ph, extra = build_network(self.config)
@@ -170,6 +179,9 @@ class Trainer(object):
         t_acc = extra['ACC']
         t_summaries = extra['T_SUMMARY']
         t_step = extra['TRAIN']
+
+        self.show_layers(extra['LAYERS'])
+
 
         saver = tf.train.Saver()
         
@@ -214,24 +226,20 @@ class Trainer(object):
                             }
 
                             if batch_n % 500 == 0:
-                                loss, acc, summ, _ = sess.run([
-                                    t_loss, 
-                                    t_acc, 
-                                    t_summaries, 
-                                    t_step],
-                                    feed_dict=feed)
+                                loss, acc, summ, _ = sess.run([t_loss, t_acc, 
+                                    t_summaries, t_step], feed_dict=feed)
                                 self.t_tb_writer.add_summary(summ, batch_n)
                                 log("batch: %d, loss: %f, accuracy: %1.3f" % 
                                             (batch_n, loss, acc))
                             else:
                                 # Feed training indicator 
-                                sess.run(self.t_step, feed_dict=feed)
+                                sess.run(t_step, feed_dict=feed)
 
-                            if batch_n % conf.VALIDATION_IVAL == 0:
-                                self.validate(sess, it_v.initializer, next_v, x, y, batch_n, v_trans_num)
-                            
+                            if batch_n % FLAGS.VALIDATION_IVAL == 0:
+                                pass # TODO validation!
+                                
                             # Check time limit
-                            if time.time() > conf.TIME_END:
+                            if time.time() > FLAGS.TIME_END:
                                 log("Training interrupted by reaching time limit.")
                                 is_over = True
                                 break
@@ -241,7 +249,7 @@ class Trainer(object):
 
                     # Save model after each epoch
                     if not FLAGS.LOCK:
-                        save_path = saver.save(sess, conf.CKPT_PATH)
+                        save_path = saver.save(sess, FLAGS.CKPT_PATH)
                         log("Model saved as: %s" % save_path)
 
                     # Exit when time limit exceeded
@@ -252,7 +260,7 @@ class Trainer(object):
                 log("Training stopped by keyboard interrupt!")
                 # Save model when training was interrupted by user 
                 if not FLAGS.LOCK:
-                    save_path = saver.save(sess, conf.CKPT_PATH)
+                    save_path = saver.save(sess, FLAGS.CKPT_PATH)
                     log("Model saved as: %s" % save_path)
     
     
@@ -265,7 +273,15 @@ class Trainer(object):
         """
         FLAGS = mkflags(self.config)
         log = lambda x: self.log(x)
+        log("*********** PREDICTION GENERATOR")
+        log("Generating predictions for:")
+        for p in paths:
+            log("  " + p)
+
         paths = get_image_paths(paths)
+        if len(paths) == 0:
+            print("No images to predict!")
+            return
 
         name = None
         predictions = None
@@ -277,32 +293,46 @@ class Trainer(object):
         if outdir is None:
             stamp = time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime())
             outdir = "predictions-" + stamp
-        
+
+        log("Building input pipe...")
         ds_init, ds_next = setup_pipe("prediction", self.config, imgs=paths)
+
+        log("Building network...")
         x_ph, _, ind_ph, extra = build_network(self.config)
         y_pred = extra['PRED']
+        self.show_layers(extra['LAYERS'])
 
         saver = tf.train.Saver()
         
         with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as sess:
             try:
+                log("Loading checkpoint from:  %s" % FLAGS.CKPT_PATH)
                 saver.restore(sess, FLAGS.CKPT_PATH)
+                log("DONE!")
             except:
                 raise Exception("Cannot restore checkpoint: %s" % FLAGS.CKPT_PATH)
 
             if not os.path.exists(outdir):
                 os.makedirs(outdir)
+                log("Created new directory for predictions: " + outdir)
 
             sess.run(ds_init)
-
+            i = 0
+            j = 0
             try:
                 while True:
                     _img_crop, _name, _shape, _wnd = sess.run(ds_next)
                     if name != _name:
-                        save_predictions(outdir, name, predictions, counters)
+                        saved_name = save_predictions(outdir, name, predictions, counters)
+                        if saved_name is not None:
+                            i += 1
+                            log("Prediction %d saved at %s" % (i, saved_name))
+                        j = 0
                         name = _name
                         predictions = np.zeros(_shape)
                         counters = np.zeros(_shape)
+                        log("Generating prediction for %s [%d x %d]" % 
+                                (name, _shape[1], _shape[0]))
                     feed = {
                         ind_ph: False,
                         x_ph: _img_crop
@@ -312,8 +342,10 @@ class Trainer(object):
                     x2 = _wnd[1] + _wnd[3]
                     y1 = _wnd[0]
                     y2 = _wnd[0] + _wnd[2]
-                    predictions[y1:y2, x1:x2] += _pred_crop
+                    predictions[y1:y2, x1:x2] += _pred_crop[0]
                     counters[y1:y2, x1:x2] += 1
+                    j += 1
+                    log("wnd_n={:5d} wnd=[{} {} {} {}]".format(j, x1, y1, x2, y2)) 
 
             except tf.errors.OutOfRangeError:
                 log("End of dataset!")

@@ -1,10 +1,10 @@
 import multiprocessing
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.data import Dataset
 import os
 
-import utils
+from tensorflow.python.data import Dataset
+from .utils import gen_crop_wnds
 
 def _to_raw_imgs(img_path, label_path, IN_SZ):
     """
@@ -17,7 +17,7 @@ def _to_raw_imgs(img_path, label_path, IN_SZ):
     lab = tf.image.decode_png(tf.read_file(label_path))
     img_sz = tf.shape(img)[:2]
     # Generate half overlapping crops, predictions will be averaged latter 
-    crops = tf.py_func(utils.gen_crop_wnds, [img_sz, IN_SZ], tf.int32)
+    crops = tf.py_func(gen_crop_wnds, [img_sz, IN_SZ], tf.int32)
     name = tf.string_split([label_path], delimiter="/").values[-1]
     return (
         img,
@@ -28,35 +28,18 @@ def _to_raw_imgs(img_path, label_path, IN_SZ):
         tf.shape(crops)
     )
 
-def setup_valid_pipe(config, log):
-    imgs = os.listdir(config.DATASET_IMAGES)
-    labs = os.listdir(config.DATASET_LABELS)
-
-    n = int(len(imgs) * config.DS_FRAC)
-    if n < 2:
-        raise Exception("Not enough files in dataset...")
-    n_v = int(n * config.VALID_DS_FRAC)
-    if n == n_v:
-        n_v -= 1
-    n_t = n - n_v
-    log("Examples in total: %d, train: %d, valid: %d" % (n, n_t, n_v))
-    
-    # Prevent non-deterministic file listing
-    imgs.sort()
-    labs.sort()
-    imgs = [os.path.join(config.DATASET_IMAGES, el) for el in imgs[:n]]
-    labs = [os.path.join(config.DATASET_LABELS, el) for el in labs[:n]]
-   
-    cores_count = min(4, max(multiprocessing.cpu_count() // 2, 1))
-    log("Using %d cores in parallel ops..." % cores_count)
-
+def setup_valid_pipe(config, imgs, labs):
+    """
+    Build training input data pipe.
+    Args:
+        config: config dict
+        imgs: images/examples
+        labs: labels
+    """
     ds_imgs = Dataset.from_tensor_slices(imgs)
     ds_labs = Dataset.from_tensor_slices(labs)
 
     ds_files = Dataset.zip((ds_imgs, ds_labs))
-    # Shuffle all files
-    ds_files = ds_files.shuffle(n)
-    ds_files = ds_files.skip(n_t)
     
     map_func = lambda x, y: _to_raw_imgs(x, y, config.INPUT_SZ)
 
