@@ -40,16 +40,16 @@ class Trainer(object):
         FLAGS = mkflags(self.config)
         config = self.config
 
-        if not os.path.exists(conf.DATASET_DIR):
+        if not os.path.exists(FLAGS.DATASET_DIR):
             raise Exception("Dataset directory does not exist!")
         
         config['DATASET_IMAGES'] = os.path.join(FLAGS.DATASET_DIR, FLAGS.IMAGES_DIR)
         config['DATASET_LABELS'] = os.path.join(FLAGS.DATASET_DIR, FLAGS.LABELS_DIR)
-
+        
         self.t_tb_writer = tf.summary.FileWriter(
-                os.path.join(FLAGS.TB_DIR, stamp, "train"))
+                os.path.join(FLAGS.TB_DIR, FLAGS.START_TIMESTAMP, "train"))
         self.v_tb_writer = tf.summary.FileWriter(
-                os.path.join(FLAGS.TB_DIR, stamp, "valid"))
+                os.path.join(FLAGS.TB_DIR, FLAGS.START_TIMESTAMP, "valid"))
 
         time_end = time.time() + to_sec(FLAGS.TIME_LIMIT)
         config['TIME_END'] = time_end
@@ -143,6 +143,8 @@ class Trainer(object):
         Args:
             [files_frac]: fraction of files used in training
         """
+        self._train_init()
+
         FLAGS = mkflags(self.config)
         log = lambda x: self.log(x)
 
@@ -162,16 +164,17 @@ class Trainer(object):
         # Prevent non-deterministic file listing
         imgs.sort()
         labs.sort()
-        _ex = shuffle(zip(imgs, labs))
+        _ex = [i for i in zip(imgs, labs)]
+        shuffle(_ex)
 
         imgs = [os.path.join(FLAGS.DATASET_IMAGES, el) for el, _ in _ex[:n]]
         labs = [os.path.join(FLAGS.DATASET_LABELS, el) for _, el in _ex[:n]] 
         
         log("** Starting training procedure...")
         t_init, t_next = setup_pipe("training", self.config, 
-                imgs=paths[:n_t], labs=labs[:n_t])
+                imgs=imgs[:n_t], labs=labs[:n_t])
         v_init, v_next = setup_pipe("validation", self.config, 
-                imgs=paths[n_t:], labs=labs[n_t:])
+                imgs=imgs[n_t:], labs=labs[n_t:])
         
         log("** Building network...")
         x_ph, y_ph, ind_ph, extra = build_network(self.config)
