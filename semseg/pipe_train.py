@@ -102,6 +102,10 @@ def setup_train_pipe(config, imgs, labs):
     ds_t = ds_t.map(lambda x, y: (x, tf.to_int32(y)))
 
 
+    # TODO: JŁ 19.07.2018 
+    # Check batch/prefetch order correctness?
+    # Probably prefetch should be **before** batch
+    
     # Create final batches
     ds_t = ds_t.batch(FLAGS.BATCH_SZ)
     ds_t = ds_t.prefetch(buffer_size=FLAGS.BATCH_SZ * 2)
